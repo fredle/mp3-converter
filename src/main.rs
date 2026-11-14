@@ -9,10 +9,10 @@ mod app;
 mod convert;
 mod i18n;
 mod license;
+mod mf;
 mod settings;
 mod theme;
 mod update;
-mod wic;
 
 fn main() {
     // First thing, always: Velopack may need to run an install/uninstall/

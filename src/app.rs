@@ -1,4 +1,4 @@
-//! The window: a queue of images, the output options, and the worker threads
+//! The window: a queue of video and audio files, the output options, and the worker threads
 //! that convert them. The footer with the auto-update toggle and version is
 //! required on every factory app. Colours and type come from `theme.rs`.
 
@@ -22,7 +22,7 @@ const PANIC_MESSAGE: &str = "decoder panicked";
 /// Space between the window edge and its contents.
 const GUTTER: i8 = 16;
 const ROW_HEIGHT: f32 = 36.0;
-const FORMATS: &str = "HEIC · WebP · AVIF · JXL · JPG · PNG · BMP · TIFF · GIF";
+const FORMATS: &str = "MP4 · MOV · MKV · AVI · WMV · M4A · AAC · WAV · FLAC · WMA · MP3";
 
 pub fn run(args: Vec<String>) -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
@@ -121,13 +121,6 @@ impl App {
         self.save();
     }
 
-    fn format_label(&self, format: Format) -> String {
-        match format {
-            Format::Webp => format!("{} ({})", format.label(), self.t.lossless),
-            _ => format.label().to_owned(),
-        }
-    }
-
     fn busy(&self) -> bool {
         self.in_flight > 0
     }
@@ -145,8 +138,7 @@ impl App {
     fn options(&self) -> Options {
         Options {
             format: self.settings.format,
-            quality: self.settings.quality,
-            max_edge: self.settings.resize.then_some(self.settings.max_edge),
+            kbps: self.settings.kbps,
             out_dir: self.settings.out_dir.clone(),
         }
     }
@@ -226,16 +218,10 @@ impl App {
         ui.horizontal(|ui| {
             let idle = !self.busy();
             if ui
-                .add_enabled(idle, egui::Button::new(t.add_photos))
+                .add_enabled(idle, egui::Button::new(t.add_files))
                 .clicked()
                 && let Some(files) = rfd::FileDialog::new()
-                    .add_filter(
-                        t.images,
-                        &[
-                            "heic", "heif", "hif", "avif", "jxl", "webp", "jpg", "jpeg", "jfif",
-                            "png", "bmp", "tif", "tiff", "gif",
-                        ],
-                    )
+                    .add_filter(t.media, &crate::convert::extensions())
                     .add_filter(t.all_files, &["*"])
                     .pick_files()
             {
@@ -407,9 +393,7 @@ impl App {
                 ui.set_width(ui.available_width());
                 for codec in codecs {
                     ui.label(match codec {
-                        Codec::Heic => t.need_heic,
-                        Codec::Avif => t.need_avif,
-                        Codec::Jxl => t.need_jxl,
+                        Codec::WebMedia => t.need_webmedia,
                     });
                     ui.horizontal_wrapped(|ui| {
                         for (name, product, free) in codec.store_products() {
@@ -435,66 +419,33 @@ impl App {
     }
 
     fn options_card(&mut self, ui: &mut egui::Ui, p: Palette) {
-        let before = (
-            self.settings.format,
-            self.settings.quality,
-            self.settings.resize,
-            self.settings.max_edge,
-        );
+        let before = (self.settings.format, self.settings.kbps);
         let t = self.t;
         theme::card(p).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let right_edge = ui.max_rect().right();
             ui.add_enabled_ui(!self.busy(), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(t.convert_to).color(p.muted));
-                    // The three formats side by side: one click, no menu.
+                    // The formats side by side: one click, no menu.
                     for format in Format::ALL {
                         let selected = self.settings.format == format;
-                        let text = RichText::new(self.format_label(format)).color(if selected {
-                            p.on_accent
-                        } else {
-                            p.text
-                        });
-                        let mut button = egui::Button::new(text);
-                        if selected {
-                            button = button.fill(p.accent).stroke(Stroke::NONE);
-                        }
-                        if ui.add(button).clicked() {
+                        if ui.add(choice(p, format.label(), selected)).clicked() {
                             self.settings.format = format;
                         }
                     }
-                    if self.settings.format == Format::Jpg {
-                        ui.add_space(6.0);
-                        // Long labels (Russian) leave less room: the slider
-                        // gives way so the row stays inside the card.
-                        let label_width = ui
-                            .painter()
-                            .layout_no_wrap(
-                                t.quality.to_owned(),
-                                egui::TextStyle::Body.resolve(ui.style()),
-                                p.muted,
-                            )
-                            .size()
-                            .x;
-                        ui.spacing_mut().slider_width =
-                            (right_edge - ui.cursor().left() - label_width - 84.0).clamp(70.0, 150.0);
-                        ui.add(
-                            egui::Slider::new(&mut self.settings.quality, 40..=100)
-                                .text(RichText::new(t.quality).color(p.muted)),
-                        );
-                    }
                 });
-                ui.horizontal_wrapped(|ui| {
-                    theme::checkbox(ui, &mut self.settings.resize, t.shrink);
-                    ui.add_enabled(
-                        self.settings.resize,
-                        egui::DragValue::new(&mut self.settings.max_edge)
-                            .range(64..=20000)
-                            .speed(8)
-                            .suffix(" px"),
-                    );
-                });
+                let rates = self.settings.format.bitrates();
+                if !rates.is_empty() {
+                    let current = self.settings.format.nearest_bitrate(self.settings.kbps);
+                    ui.horizontal(|ui| {
+                        for rate in rates {
+                            if ui.add(choice(p, &rate.to_string(), *rate == current)).clicked() {
+                                self.settings.kbps = *rate;
+                            }
+                        }
+                        ui.label(RichText::new("kbps").color(p.muted));
+                    });
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(t.save_to).color(p.muted));
                     let same = self.settings.out_dir.is_none();
@@ -515,12 +466,7 @@ impl App {
                 });
             });
         });
-        let after = (
-            self.settings.format,
-            self.settings.quality,
-            self.settings.resize,
-            self.settings.max_edge,
-        );
+        let after = (self.settings.format, self.settings.kbps);
         if before != after {
             self.save();
         }
@@ -695,10 +641,28 @@ fn status_ui(ui: &mut egui::Ui, status: &Status, p: Palette, t: &Strings) {
         Status::Failed(ConvertError::MissingCodec(_)) => {
             ui.label(RichText::new(t.needs_extension).color(p.warn));
         }
+        Status::Failed(ConvertError::NoAudio) => {
+            ui.label(RichText::new(t.no_audio).color(p.error));
+        }
+        Status::Failed(ConvertError::Unreadable(message)) => {
+            ui.label(RichText::new(t.cant_read).color(p.error))
+                .on_hover_text(message);
+        }
         Status::Failed(ConvertError::Other(message)) => {
             ui.label(RichText::new(short_error(message, t.cant_read)).color(p.error))
                 .on_hover_text(message);
         }
+    }
+}
+
+/// One of a row of either/or buttons; the chosen one is filled.
+fn choice<'a>(p: Palette, label: &str, selected: bool) -> egui::Button<'a> {
+    let text = RichText::new(label).color(if selected { p.on_accent } else { p.text });
+    let button = egui::Button::new(text);
+    if selected {
+        button.fill(p.accent).stroke(Stroke::NONE)
+    } else {
+        button
     }
 }
 
@@ -727,7 +691,7 @@ fn spawn_workers(
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2)
-        .clamp(1, 8)
+        .clamp(1, 4)
         .min(jobs.len());
     let jobs = Arc::new(Mutex::new(jobs));
     for _ in 0..threads {

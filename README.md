@@ -2,33 +2,41 @@
 
 Convert video and audio files to MP3, M4A, WAV or FLAC, offline.
 
-iPhone photos arrive as HEIC and web images as WebP or AVIF, which many
-Windows apps, websites and printers reject. Drop them in, pick JPG, PNG or
-WebP, and press Convert. Nothing is uploaded: images never leave the PC.
+Sometimes you have a video and only want the sound, or audio in a format a
+phone, car or editor won't play. Drop the files in, pick MP3, M4A, WAV or
+FLAC, and press Convert. Nothing is uploaded: files never leave the PC.
 
 ## What it does
 
-- Reads HEIC/HEIF, AVIF, JXL, WebP, JPG, PNG, BMP, TIFF and GIF. Drop files or
-  whole folders on the window, or use **Add photos** / **Add folder**.
-- Writes JPG (quality 40-100), PNG or lossless WebP.
-- Optionally shrinks each image so its longest side fits a pixel limit.
+- Reads video (MP4, M4V, MOV, 3GP, 3G2, AVI, WMV, ASF, MKV, WebM) and audio
+  (MP3, M4A, M4B, AAC, WAV, FLAC, WMA, OGG, OGA, Opus). Drop files or whole
+  folders on the window, or use **Add files** / **Add folder**.
+- Writes MP3 (128, 192, 256 or 320 kbps), M4A (AAC at 96, 128, 160 or
+  192 kbps), WAV or FLAC.
+- Takes the first audio track of a video. A video with no sound is reported
+  as "No sound in this file".
+- Mixes anything with more than two channels down to stereo. MP3 and M4A are
+  written at 44.1 or 48 kHz; WAV and FLAC keep the source's sample rate.
 - Saves next to the original or into a folder you choose. It never overwrites
-  a file: a taken name becomes `name (2).jpg`.
-- Keeps the photo's orientation and its modified date.
+  a file: a taken name becomes `name (2).mp3`. The new file keeps the
+  original's modified date.
+- Converts several files at once.
 
-## HEIC, AVIF and JXL need Windows' own codecs
+## Formats come from Windows
 
-The app ships no decoders for these formats; it reads them through Windows.
-If a codec is missing, the row says "Needs a Windows extension" and the app
-links to the right Microsoft Store page:
+The app ships no codecs. It reads and writes everything through Windows Media
+Foundation, so what it can open is what Windows can decode:
 
-| Format | Extension | Price |
-|---|---|---|
-| HEIC/HEIF | HEIF Image Extension and HEVC Video Extensions | free and about £0.79 |
-| AVIF | AV1 Video Extension | free |
-| JXL | JPEG XL Image Extension | free |
+| Format | What Windows needs |
+|---|---|
+| MP4, MOV, MKV, AVI, WMV, 3GP, MP3, M4A, AAC, WAV, FLAC, WMA | nothing, built in |
+| WebM | usually nothing; if Windows cannot read it, Web Media Extensions |
+| OGG, OGA, Opus | Web Media Extensions, free in the Microsoft Store |
+| Dolby Digital (AC-3) sound | not supported: current versions of Windows no longer include the decoder |
 
-Many PCs already have them. Install, then press **Try again**.
+If the extension is missing, the row says "Needs a Windows extension" and the
+app links to its Store page. Install it, then press **Try again**. A file
+Windows cannot decode at all is listed with Windows' own explanation.
 
 ## Languages
 
@@ -44,10 +52,11 @@ chosen from the browser's `Accept-Language`.
 
 ## Free and unlocked
 
-Every feature is free. A free run converts three photos at a time, and a
-one-off unlock (£4.99, at https://mp3.leatham.net/buy) removes the limit. A licence key is the buyer's email signed by the
-licence server and is checked offline. If `BUY_URL` in `src/license.rs` is emptied, there is no
-limit at all.
+Every feature is free. A free run converts three files at a time, and a
+one-off unlock (£4.99, at https://mp3.leatham.net/buy) removes the limit. A
+licence key is the buyer's email signed by the licence server
+(`MAC1.<email>.<signature>`) and is checked offline. If `BUY_URL` in
+`src/license.rs` is emptied, there is no limit at all.
 
 ## Install
 
@@ -59,7 +68,7 @@ It installs per user, needs no admin rights and updates itself.
 
 ## Data and privacy
 
-- Settings (output format, folder, licence key) are in
+- Settings (output format, bitrate, folder, licence key) are in
   `%LOCALAPPDATA%\Mp3Converter\settings.json`.
 - No telemetry and no accounts. The only network use is the update check
   against GitHub Releases, about once a day, which can be turned off in the
@@ -86,5 +95,6 @@ cargo test
 ```
 
 Two tests run only when given a real input:
-`HWC_HEIC_SAMPLE=<path to a .heic>` converts it through Windows' codec, and
-`HWC_LICENSE_KEY=<key for buyer@example.com>` checks a server-issued key.
+`MAC_SAMPLES=<folder of media files>` converts every file in it through
+Windows' codecs, and `HWC_LICENSE_KEY=<key for buyer@example.com>` checks a
+server-issued key.
