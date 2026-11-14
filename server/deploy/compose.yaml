@@ -1,0 +1,26 @@
+# Runs on the shared backend host (app-factory/infra/backend-host). The host's
+# Caddy reaches it as "mp3-converter:8080" on the "web" network and handles HTTPS.
+# Settings: .env next to this file on the host (from app.env.example).
+# Keys and other secret files: ./secrets/, mounted read-only at /run/secrets.
+name: mp3-converter
+
+services:
+  server:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - data:/data
+      - ./secrets:/run/secrets:ro
+    networks:
+      web:
+        aliases: [mp3-converter]
+    mem_limit: 384m
+
+networks:
+  web:
+    external: true
+
+volumes:
+  # On the host's boot disk, so covered by its daily snapshots.
+  data:

@@ -1,0 +1,7 @@
+target/
+Releases/
+trustedsigning/
+store-package.json
+server/deploy/secrets/
+server/node_modules/
+server/deploy/.env
