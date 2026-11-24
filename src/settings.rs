@@ -18,6 +18,9 @@ pub struct Settings {
     /// Bitrate for MP3 and M4A, in kbps.
     #[serde(default = "default_kbps")]
     pub kbps: u32,
+    /// Mix everything down to one channel (for speech).
+    #[serde(default)]
+    pub mono: bool,
     /// Folder for converted files; `None` writes next to each original.
     #[serde(default)]
     pub out_dir: Option<std::path::PathBuf>,
@@ -44,6 +47,7 @@ impl Default for Settings {
             last_update_check: 0,
             format: Default::default(),
             kbps: default_kbps(),
+            mono: false,
             out_dir: None,
             license_key: String::new(),
             language: None,

@@ -21,11 +21,17 @@ What it writes: MP3, M4A (AAC), WAV or FLAC.
 
 Useful details:
 - Convert a whole folder, including its subfolders, in one go.
-- Choose the MP3 or M4A bitrate, from small files to best quality.
+- See each file's length and size, and its new size once converted.
+- Choose the quality: Smaller, Standard, High or Best, with the bitrate shown and an estimate of the total size before you start.
+- Mono (voice) for lectures and voice notes: one channel, about half the size.
+- Progress for every file and for the whole batch, with Cancel. A cancelled file leaves nothing half-written behind.
+- Title, artist, album and other tags are copied to MP3, M4A and FLAC files where Windows can carry them over.
+- Play a finished file or show it in its folder straight from the list, and retry a file that failed.
 - Save next to the originals or into a folder you pick.
 - Never overwrites anything. If a name is taken, the new file gets "(2)".
 - Surround sound is mixed down to stereo so the file plays everywhere.
 - Converts several files at once, so large batches finish quickly.
+- Keyboard shortcuts: Ctrl+O to add files, Enter to convert, Esc to cancel.
 
 About formats: the app uses the decoders and encoders built into Windows, so it is small and installs in seconds. OGG and Opus files need Microsoft's free Web Media Extensions; if it is missing, the app says so and opens its Store page. Dolby Digital (AC-3) sound is not supported, because current versions of Windows no longer include that decoder.
 
@@ -39,8 +45,12 @@ No account, no ads, no telemetry.
 - Works offline; files are never uploaded
 - Free to convert three files per run, with no watermark and no trial period
 - Optional one-off unlock for unlimited batches
-- Choice of MP3 and M4A bitrate, up to 320 kbps
+- Choice of MP3 and M4A quality, up to 320 kbps, with an estimated output size
+- Mono option for speech
 - Lossless output to WAV or FLAC
+- Progress per file and per batch, with Cancel
+- Keeps title, artist, album and other tags (MP3, M4A, FLAC)
+- Shows each file's length and size before and after
 - Save beside the originals or in a folder you choose
 - Never overwrites an existing file
 - Mixes surround sound down to stereo
@@ -71,7 +81,7 @@ rating answer "Does the app allow users to purchase digital goods?" to be Yes.
 
 ## Privacy
 
-Stored locally: settings (output format, bitrate, output folder, licence key)
+Stored locally: settings (output format, bitrate, mono, output folder, licence key)
 in %LOCALAPPDATA%\Mp3Converter\settings.json. Nothing else is kept.
 
 Network: a version check against GitHub Releases about once a day, which the
@@ -79,8 +89,9 @@ user can turn off. No audio, video, file names or usage data are sent anywhere.
 
 ## Screenshot ideas
 
-1. The window with a dropped folder of MP4 videos listed, MP3 chosen and "Convert 12 files" ready.
-2. A finished batch: green ticks with the new MP3 names and "Open folder".
-3. The output options: format list open (MP3, M4A, WAV, FLAC), bitrate choice and save-to setting.
-4. A mixed list of audio files (FLAC, WAV, WMA, M4A) being converted, showing it is not only for video.
-5. An OGG file showing "Needs a Windows extension" with the Web Media Extensions Store button, showing the app explains rather than fails.
+1. The window with a dropped folder of MP4 videos listed with their lengths and sizes, MP3 chosen, the size estimate and "Convert 12 files" ready.
+2. A batch converting: per-file percentages and the overall progress bar with Cancel.
+3. A finished batch: "Done" on each row with the size before and after, and the summary line with "Open folder".
+4. The output options: MP3, M4A, WAV, FLAC and the Smaller / Standard / High / Best quality choice, with Mono (voice) ticked.
+5. A mixed list of audio files (FLAC, WAV, WMA, M4A) being converted, showing it is not only for video.
+6. An OGG file showing "Needs a Windows extension" with the Web Media Extensions Store button, showing the app explains rather than fails.

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::mf::{MfError, Target};
+use crate::mf::{MfError, Progress, Target};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Format {
@@ -48,6 +48,18 @@ impl Format {
         }
     }
 
+    /// The same four quality steps for one channel. Windows' MP3 encoder
+    /// tops out at 128 kbps for mono, and a voice needs about half the
+    /// bitrate of stereo music anyway. Every rate here is one the encoders
+    /// list for mono at 44.1 and 48 kHz.
+    pub fn mono_bitrates(self) -> &'static [u32] {
+        match self {
+            Format::Mp3 => &[64, 96, 112, 128],
+            Format::M4a => &[48, 64, 96, 128],
+            Format::Wav | Format::Flac => &[],
+        }
+    }
+
     /// The offered bitrate nearest to `kbps`, so a setting chosen for one
     /// format still makes sense after switching to another.
     pub fn nearest_bitrate(self, kbps: u32) -> u32 {
@@ -58,8 +70,21 @@ impl Format {
             .unwrap_or(0)
     }
 
-    fn target(self, kbps: u32) -> Target {
-        let kbps = self.nearest_bitrate(kbps);
+    /// Which quality step (0 = smallest) `kbps` falls on.
+    pub fn tier(self, kbps: u32) -> usize {
+        let rate = self.nearest_bitrate(kbps);
+        self.bitrates().iter().position(|r| *r == rate).unwrap_or(0)
+    }
+
+    /// The bitrate actually written for the stored `kbps` setting: the same
+    /// quality step in the mono list when `mono` is on. 0 for lossless.
+    pub fn effective_kbps(self, kbps: u32, mono: bool) -> u32 {
+        let rates = if mono { self.mono_bitrates() } else { self.bitrates() };
+        rates.get(self.tier(kbps)).copied().unwrap_or(0)
+    }
+
+    fn target(self, kbps: u32, mono: bool) -> Target {
+        let kbps = self.effective_kbps(kbps, mono);
         match self {
             Format::Mp3 => Target::Mp3 { kbps },
             Format::M4a => Target::M4a { kbps },
@@ -72,8 +97,10 @@ impl Format {
 #[derive(Clone, Debug)]
 pub struct Options {
     pub format: Format,
-    /// Bitrate for MP3 and M4A, in kbps.
+    /// Bitrate for MP3 and M4A, in kbps, as one of `Format::bitrates`.
     pub kbps: u32,
+    /// One channel, for speech.
+    pub mono: bool,
     /// Where to write; `None` means next to each source file.
     pub out_dir: Option<PathBuf>,
 }
@@ -103,6 +130,8 @@ pub enum ConvertError {
     /// Windows could not open the file or decode its audio; the text is
     /// Windows' own explanation.
     Unreadable(String),
+    /// Stopped by the user; nothing was written.
+    Cancelled,
     Other(String),
 }
 
@@ -118,6 +147,69 @@ fn extension_of(path: &Path) -> String {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase()
+}
+
+/// Whether the file is a video (as opposed to plain audio), by extension.
+pub fn is_video(path: &Path) -> bool {
+    VIDEO.contains(&extension_of(path).as_str())
+}
+
+/// Lengths as a media player shows them: "0:07", "3:42", "1:02:05".
+pub fn format_duration(seconds: f64) -> String {
+    let total = if seconds.is_finite() && seconds > 0.0 {
+        seconds.round() as u64
+    } else {
+        0
+    };
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// File sizes the way Explorer counts them (1 KB = 1024 bytes), with one
+/// decimal below 100 so small differences still show.
+pub fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if value < 100.0 {
+        // Rounding 99.96 up would print "100.0"; keep the format steady.
+        let rounded = (value * 10.0).round() / 10.0;
+        if rounded < 100.0 {
+            return format!("{rounded:.1} {}", UNITS[unit]);
+        }
+    }
+    format!("{value:.0} {}", UNITS[unit])
+}
+
+/// The output size of one file, when it can be known before converting:
+/// the bitrate times the length for MP3 and M4A, the exact size for WAV.
+/// FLAC depends on the sound itself, so it has no estimate.
+pub fn estimate_bytes(format: Format, kbps: u32, mono: bool, info: &crate::mf::Info) -> Option<u64> {
+    let seconds = info.seconds?;
+    match format {
+        Format::Mp3 | Format::M4a => {
+            let kbps = format.effective_kbps(kbps, mono) as f64;
+            Some((kbps * 1000.0 / 8.0 * seconds).round() as u64)
+        }
+        Format::Wav => {
+            let (rate, channels) =
+                crate::mf::output_shape(Target::Wav, info.rate, info.channels, mono);
+            let frames = (rate as f64 * seconds).round() as u64;
+            Some(44 + frames * channels as u64 * 2)
+        }
+        Format::Flac => None,
+    }
 }
 
 pub fn is_supported(path: &Path) -> bool {
@@ -207,14 +299,24 @@ fn is_container_signature(head: &[u8], codec: Codec) -> bool {
     }
 }
 
-/// Converts one file and returns where it was written.
-pub fn convert_file(source: &Path, options: &Options) -> Result<PathBuf, ConvertError> {
+/// Converts one file and returns where it was written. `progress` follows
+/// the conversion and can cancel it.
+pub fn convert_file(
+    source: &Path,
+    options: &Options,
+    progress: &Progress,
+) -> Result<PathBuf, ConvertError> {
+    if progress.cancelled() {
+        return Err(ConvertError::Cancelled);
+    }
     if let Some(dir) = &options.out_dir {
         std::fs::create_dir_all(dir).map_err(|e| ConvertError::Other(e.to_string()))?;
     }
     let target = output_path(source, options, |p| p.exists());
-    match crate::mf::transcode(source, &target, options.format.target(options.kbps)) {
+    let shape = options.format.target(options.kbps, options.mono);
+    match crate::mf::transcode(source, &target, shape, options.mono, progress) {
         Ok(()) => {}
+        Err(MfError::Cancelled) => return Err(ConvertError::Cancelled),
         Err(MfError::NoAudio) => return Err(ConvertError::NoAudio),
         Err(MfError::Unreadable(message)) => {
             // Windows gives much the same answer for a damaged file as for a
@@ -228,7 +330,13 @@ pub fn convert_file(source: &Path, options: &Options) -> Result<PathBuf, Convert
         }
         Err(MfError::Other(message)) => return Err(ConvertError::Other(message)),
     }
-    // Keep the file's date so sorting by date still works.
+    // Title, artist and so on, where both formats can hold them. Never
+    // fails the conversion; WAV files get none.
+    if options.format != Format::Wav {
+        crate::tags::copy(source, &target);
+    }
+    // Keep the file's date so sorting by date still works. After the tags,
+    // because writing them touches the file.
     if let Ok(modified) = std::fs::metadata(source).and_then(|m| m.modified())
         && let Ok(file) = std::fs::File::options().write(true).open(&target)
     {
@@ -245,6 +353,7 @@ mod tests {
         Options {
             format,
             kbps: 192,
+            mono: false,
             out_dir: None,
         }
     }
@@ -258,7 +367,12 @@ mod tests {
 
     /// Two seconds of a 440 Hz tone as a 16-bit WAV file.
     fn write_tone(path: &Path, rate: u32, channels: u32) {
-        let frames = rate * 2;
+        write_tone_for(path, rate, channels, 2);
+    }
+
+    /// `seconds` of a 440 Hz tone as a 16-bit WAV file.
+    pub(crate) fn write_tone_for(path: &Path, rate: u32, channels: u32, seconds: u32) {
+        let frames = rate * seconds;
         let mut bytes = crate::mf::wav_header(rate, channels, frames * channels * 2).to_vec();
         for i in 0..frames {
             let t = i as f32 / rate as f32;
@@ -295,8 +409,8 @@ mod tests {
         assert_eq!(Format::M4a.nearest_bitrate(320), 192);
         assert_eq!(Format::Mp3.nearest_bitrate(96), 128);
         assert_eq!(Format::Wav.nearest_bitrate(192), 0);
-        assert_eq!(Format::M4a.target(256), Target::M4a { kbps: 192 });
-        assert_eq!(Format::Flac.target(256), Target::Flac);
+        assert_eq!(Format::M4a.target(256, false), Target::M4a { kbps: 192 });
+        assert_eq!(Format::Flac.target(256, false), Target::Flac);
     }
 
     #[test]
@@ -356,7 +470,7 @@ mod tests {
         let src = dir.join("broken.mp4");
         std::fs::write(&src, b"not a video").unwrap();
         assert!(matches!(
-            convert_file(&src, &options(Format::Mp3)),
+            convert_file(&src, &options(Format::Mp3), &Progress::default()),
             Err(ConvertError::Unreadable(_))
         ));
         assert!(!dir.join("broken.mp3").exists());
@@ -364,7 +478,7 @@ mod tests {
         let ogg = dir.join("broken.ogg");
         std::fs::write(&ogg, b"not audio").unwrap();
         assert!(matches!(
-            convert_file(&ogg, &options(Format::Mp3)),
+            convert_file(&ogg, &options(Format::Mp3), &Progress::default()),
             Err(ConvertError::Unreadable(_))
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -375,12 +489,12 @@ mod tests {
         let dir = temp_dir("wav");
         let src = dir.join("tone.wav");
         write_tone(&src, 22_050, 1);
-        let out = convert_file(&src, &options(Format::Wav)).unwrap();
+        let out = convert_file(&src, &options(Format::Wav), &Progress::default()).unwrap();
         assert_eq!(out, dir.join("tone (2).wav"));
         let (rate, channels, seconds) = wav_info(&out);
         assert_eq!((rate, channels), (22_050, 1));
         assert!((seconds - 2.0).abs() < 0.05, "{seconds}");
-        assert_eq!(convert_file(&src, &options(Format::Wav)).unwrap(), dir.join("tone (3).wav"));
+        assert_eq!(convert_file(&src, &options(Format::Wav), &Progress::default()).unwrap(), dir.join("tone (3).wav"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -394,7 +508,7 @@ mod tests {
             let src = dir.join(name);
             write_tone(&src, rate, channels);
             for format in [Format::Mp3, Format::M4a, Format::Flac] {
-                let out = match convert_file(&src, &options(format)) {
+                let out = match convert_file(&src, &options(format), &Progress::default()) {
                     Ok(out) => out,
                     Err(ConvertError::Other(m)) if m.contains("no encoder") => {
                         println!("skipped {format:?}: {m}");
@@ -403,11 +517,223 @@ mod tests {
                     Err(e) => panic!("{name} -> {format:?}: {e:?}"),
                 };
                 assert!(std::fs::metadata(&out).unwrap().len() > 2_000, "{out:?}");
-                let back = convert_file(&out, &options(Format::Wav)).unwrap();
+                let back = convert_file(&out, &options(Format::Wav), &Progress::default()).unwrap();
                 let (_, back_channels, seconds) = wav_info(&back);
                 assert_eq!(back_channels, channels, "{name} -> {format:?}");
                 assert!((seconds - 2.0).abs() < 0.2, "{name} -> {format:?}: {seconds}s");
             }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn durations_read_like_a_player() {
+        assert_eq!(format_duration(0.0), "0:00");
+        assert_eq!(format_duration(7.4), "0:07");
+        assert_eq!(format_duration(59.6), "1:00");
+        assert_eq!(format_duration(222.0), "3:42");
+        assert_eq!(format_duration(3725.0), "1:02:05");
+        assert_eq!(format_duration(-3.0), "0:00");
+        assert_eq!(format_duration(f64::NAN), "0:00");
+    }
+
+    #[test]
+    fn sizes_read_like_explorer() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1000), "1000 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(5_347_737), "5.1 MB");
+        assert_eq!(format_size(50_436_505), "48.1 MB");
+        assert_eq!(format_size(222_298_112), "212 MB");
+        assert_eq!(format_size(104_857_000), "100 MB");
+        assert_eq!(format_size(3 * 1024 * 1024 * 1024), "3.0 GB");
+    }
+
+    #[test]
+    fn mono_keeps_the_quality_step_at_rates_the_encoders_offer() {
+        assert_eq!(Format::Mp3.tier(320), 3);
+        assert_eq!(Format::Mp3.effective_kbps(320, false), 320);
+        assert_eq!(Format::Mp3.effective_kbps(320, true), 128);
+        assert_eq!(Format::Mp3.effective_kbps(128, true), 64);
+        assert_eq!(Format::M4a.effective_kbps(160, true), 96);
+        assert_eq!(Format::Flac.effective_kbps(192, true), 0);
+        assert_eq!(Format::Mp3.target(192, true), Target::Mp3 { kbps: 96 });
+        for format in Format::ALL {
+            assert_eq!(format.bitrates().len(), format.mono_bitrates().len());
+        }
+    }
+
+    #[test]
+    fn estimates_only_what_can_be_known() {
+        let info = crate::mf::Info {
+            seconds: Some(60.0),
+            rate: 44_100,
+            channels: 2,
+        };
+        // 192 kbps for a minute: 1.44 MB.
+        assert_eq!(estimate_bytes(Format::Mp3, 192, false, &info), Some(1_440_000));
+        assert_eq!(estimate_bytes(Format::Mp3, 192, true, &info), Some(720_000));
+        // WAV is exact: 44-byte header plus 16-bit samples.
+        assert_eq!(estimate_bytes(Format::Wav, 0, false, &info), Some(44 + 44_100 * 60 * 4));
+        assert_eq!(estimate_bytes(Format::Wav, 0, true, &info), Some(44 + 44_100 * 60 * 2));
+        assert_eq!(estimate_bytes(Format::Flac, 0, false, &info), None);
+        let unknown = crate::mf::Info { seconds: None, ..info };
+        assert_eq!(estimate_bytes(Format::Mp3, 192, false, &unknown), None);
+    }
+
+    #[test]
+    fn wav_estimate_matches_the_written_file() {
+        let dir = temp_dir("estimate");
+        let src = dir.join("tone.wav");
+        write_tone(&src, 48_000, 2);
+        let info = crate::mf::probe(&src).unwrap();
+        assert!((info.seconds.unwrap() - 2.0).abs() < 0.01, "{info:?}");
+        let out = convert_file(&src, &options(Format::Wav), &Progress::default()).unwrap();
+        let written = std::fs::metadata(&out).unwrap().len();
+        assert_eq!(estimate_bytes(Format::Wav, 0, false, &info), Some(written));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mono_writes_one_channel_in_every_format() {
+        let dir = temp_dir("mono");
+        let src = dir.join("stereo.wav");
+        write_tone(&src, 44_100, 2);
+        let mut opts = options(Format::Wav);
+        opts.mono = true;
+        for format in Format::ALL {
+            opts.format = format;
+            let out = match convert_file(&src, &opts, &Progress::default()) {
+                Ok(out) => out,
+                Err(ConvertError::Other(m)) if m.contains("no encoder") => continue,
+                Err(e) => panic!("{format:?}: {e:?}"),
+            };
+            let info = crate::mf::probe(&out).unwrap();
+            assert_eq!(info.channels, 1, "{format:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn progress_reaches_the_end_for_every_format() {
+        let dir = temp_dir("progress");
+        let src = dir.join("tone.wav");
+        write_tone(&src, 44_100, 2);
+        for format in Format::ALL {
+            let progress = Progress::default();
+            match convert_file(&src, &options(format), &progress) {
+                Ok(_) => assert_eq!(progress.fraction(), Some(1.0), "{format:?}"),
+                Err(ConvertError::Other(m)) if m.contains("no encoder") => {}
+                Err(e) => panic!("{format:?}: {e:?}"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancels part-way through a long file: the conversion stops with
+    /// `Cancelled` and leaves no output behind, for the encoders and WAV.
+    #[test]
+    fn cancel_stops_part_way_and_leaves_nothing_behind() {
+        let dir = temp_dir("cancel");
+        let src = dir.join("long.wav");
+        write_tone_for(&src, 44_100, 2, 120);
+        // Already cancelled before it starts.
+        let stopped = Progress::default();
+        stopped.cancel();
+        assert_eq!(
+            convert_file(&src, &options(Format::Mp3), &stopped),
+            Err(ConvertError::Cancelled)
+        );
+        for format in [Format::Mp3, Format::Wav] {
+            let progress = std::sync::Arc::new(Progress::default());
+            let watcher = {
+                let progress = progress.clone();
+                std::thread::spawn(move || {
+                    let started = std::time::Instant::now();
+                    while progress.fraction().unwrap_or(0.0) < 0.05
+                        && started.elapsed().as_secs() < 30
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    progress.cancel();
+                })
+            };
+            let result = convert_file(&src, &options(format), &progress);
+            watcher.join().unwrap();
+            match result {
+                Err(ConvertError::Cancelled) => {}
+                Err(ConvertError::Other(m)) if m.contains("no encoder") => continue,
+                other => panic!("{format:?}: {other:?}"),
+            }
+            let fraction = progress.fraction().unwrap();
+            assert!(fraction > 0.0 && fraction < 1.0, "{format:?}: {fraction}");
+            let left: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name())
+                .collect();
+            assert_eq!(left, vec![std::ffi::OsString::from("long.wav")], "{format:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Tags an MP3, converts it to M4A and FLAC and reads the tags back.
+    /// Skips a format when Windows has no encoder or no property handler
+    /// for it.
+    #[test]
+    fn tags_are_carried_over() {
+        use windows::Win32::Storage::EnhancedStorage::{
+            PKEY_Music_AlbumTitle, PKEY_Music_Artist, PKEY_Title,
+        };
+        let dir = temp_dir("tags");
+        let src = dir.join("tone.wav");
+        write_tone(&src, 44_100, 2);
+        let mp3 = match convert_file(&src, &options(Format::Mp3), &Progress::default()) {
+            Ok(out) => out,
+            Err(ConvertError::Other(m)) if m.contains("no encoder") => {
+                println!("skipped: {m}");
+                return;
+            }
+            Err(e) => panic!("{e:?}"),
+        };
+        let wrote = crate::tags::set_text(&mp3, &PKEY_Title, "Morning Tone", false)
+            && crate::tags::set_text(&mp3, &PKEY_Music_Artist, "Test Artist", true)
+            && crate::tags::set_text(&mp3, &PKEY_Music_AlbumTitle, "Test Album", false);
+        if !wrote {
+            println!("skipped: no MP3 property handler");
+            return;
+        }
+        assert_eq!(crate::tags::get_text(&mp3, &PKEY_Title).as_deref(), Some("Morning Tone"));
+        for format in [Format::M4a, Format::Flac, Format::Wav] {
+            let out = match convert_file(&mp3, &options(format), &Progress::default()) {
+                Ok(out) => out,
+                Err(ConvertError::Other(m)) if m.contains("no encoder") => continue,
+                Err(e) => panic!("{format:?}: {e:?}"),
+            };
+            let title = crate::tags::get_text(&out, &PKEY_Title);
+            if format == Format::Wav {
+                // WAV gets none, and the conversion still succeeds.
+                assert_ne!(title.as_deref(), Some("Morning Tone"));
+                continue;
+            }
+            if title.is_none() && crate::tags::copy(&mp3, &out) == 0 {
+                println!("skipped {format:?}: no property handler");
+                continue;
+            }
+            assert_eq!(title.as_deref(), Some("Morning Tone"), "{format:?}");
+            assert_eq!(
+                crate::tags::get_text(&out, &PKEY_Music_Artist).as_deref(),
+                Some("Test Artist"),
+                "{format:?}"
+            );
+            assert_eq!(
+                crate::tags::get_text(&out, &PKEY_Music_AlbumTitle).as_deref(),
+                Some("Test Album"),
+                "{format:?}"
+            );
+            // Writing the tags did not undo the date carry-over.
+            let modified = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
+            assert_eq!(modified(&out), modified(&mp3), "{format:?}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -422,7 +748,7 @@ mod tests {
         let mut opts = options(Format::Mp3);
         opts.out_dir = Some(out_dir.clone());
         for source in collect_inputs(&[PathBuf::from(folder)], &[]) {
-            let result = convert_file(&source, &opts);
+            let result = convert_file(&source, &opts, &Progress::default());
             println!("{:?} -> {:?}", source.file_name().unwrap(), result.as_ref().map(|p| std::fs::metadata(p).unwrap().len()));
         }
         if std::env::var("MAC_KEEP").is_err() { let _ = std::fs::remove_dir_all(&out_dir); } else { println!("kept {out_dir:?}"); }

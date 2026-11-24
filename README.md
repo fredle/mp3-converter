@@ -12,7 +12,30 @@ FLAC, and press Convert. Nothing is uploaded: files never leave the PC.
   (MP3, M4A, M4B, AAC, WAV, FLAC, WMA, OGG, OGA, Opus). Drop files or whole
   folders on the window, or use **Add files** / **Add folder**.
 - Writes MP3 (128, 192, 256 or 320 kbps), M4A (AAC at 96, 128, 160 or
-  192 kbps), WAV or FLAC.
+  192 kbps), WAV or FLAC. The bitrates are shown as Smaller, Standard, High
+  and Best with the kbps next to each, and the options show roughly how big
+  the files about to be converted will be (bitrate times length for MP3 and
+  M4A, the exact size for WAV; FLAC depends on the sound, so it shows none).
+- **Mono (voice)** writes one channel in any format, for lectures and voice
+  notes. MP3 and M4A then use mono bitrates (MP3 64, 96, 112 or 128 kbps;
+  M4A 48, 64, 96 or 128 kbps), because Windows' MP3 encoder stops at
+  128 kbps for mono.
+- Each row shows the file's length and size, and after converting the new
+  size (`3:42 · 48.1 MB → 5.1 MB`). Lengths are read in the background, so
+  adding a folder of hundreds of files does not hold up the window.
+- Shows progress per file and for the whole run. **Cancel** (or Esc) stops
+  it: files being converted stop and their partial output is deleted, files
+  not yet started go back to waiting.
+- Copies title, artist, album artist, album, year, track number and genre
+  to MP3, M4A and FLAC files, through the same Windows property handlers
+  Explorer uses. This is best effort: if Windows cannot read or write a tag
+  for a format, the file is converted without it. WAV output gets no tags.
+- Finished rows have Play and Show in folder; a failed row can be retried
+  on its own. After a run, a line sums it up (`3 converted · 212 MB → 18 MB`)
+  next to Open folder and Clear finished, and the taskbar button flashes if
+  the window is in the background.
+- Keyboard: Ctrl+O adds files, Enter converts, Esc cancels a run or closes
+  the unlock dialog.
 - Takes the first audio track of a video. A video with no sound is reported
   as "No sound in this file".
 - Mixes anything with more than two channels down to stereo. MP3 and M4A are
@@ -68,7 +91,7 @@ It installs per user, needs no admin rights and updates itself.
 
 ## Data and privacy
 
-- Settings (output format, bitrate, folder, licence key) are in
+- Settings (output format, bitrate, mono, folder, licence key) are in
   `%LOCALAPPDATA%\Mp3Converter\settings.json`.
 - No telemetry and no accounts. The only network use is the update check
   against GitHub Releases, about once a day, which can be turned off in the
@@ -94,7 +117,18 @@ cargo build --release
 cargo test
 ```
 
+`HWC_THEME=light` or `HWC_THEME=dark` forces a look without changing
+Windows' setting. The colours are in `src/theme.rs`, where a test checks
+that every text colour reaches a 4.5:1 contrast on what it is drawn on, in
+both looks.
+
 Two tests run only when given a real input:
 `MAC_SAMPLES=<folder of media files>` converts every file in it through
 Windows' codecs, and `HWC_LICENSE_KEY=<key for buyer@example.com>` checks a
 server-issued key.
+
+Store screenshots: `MAC_SHOTS=<folder>` makes the app draw three made-up
+scenes (ready, converted, empty), write each as a raw `<n>_<w>x<h>.rgba`
+frame into the folder and close, without converting anything or saving
+settings. `MAC_SHOTS_LANG=<locale>` picks the language and
+`MAC_SHOTS_VERSION` the version shown.

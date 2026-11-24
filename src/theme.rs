@@ -1,20 +1,29 @@
-//! The app's look: colours for light and dark, type, spacing and fonts.
-//! Everything visual that is not layout lives here, so the window code in
-//! `app.rs` only says what goes where.
+//! The app's look: colours for light and dark, type, spacing, fonts and
+//! the few painted pieces (icons, the waveform, pills, the segmented
+//! control). Everything visual that is not layout lives here, so the window
+//! code in `app.rs` only says what goes where.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Theme, Vec2,
+    self, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Sense, Shape, Stroke,
+    StrokeKind, TextStyle, Theme, Vec2, pos2, vec2,
 };
 
 use crate::i18n::Lang;
 
 /// Corner radius of cards and the drop zone.
 pub const CARD_RADIUS: u8 = 12;
-/// Corner radius of buttons and inputs.
+/// Corner radius of buttons, inputs and the segmented control.
 pub const CONTROL_RADIUS: u8 = 8;
+/// Height of buttons and single-line controls.
+pub const CONTROL_HEIGHT: f32 = 32.0;
+/// Height of the main button and the progress shown in its place.
+pub const PRIMARY_HEIGHT: f32 = 44.0;
+/// Text sizes.
+pub const BODY_SIZE: f32 = 14.5;
+pub const SMALL_SIZE: f32 = 12.5;
 
 /// Font family for headings and the main button. Always defined; it falls
 /// back to the regular face when Segoe UI Semibold is missing.
@@ -22,62 +31,93 @@ pub fn semibold() -> FontFamily {
     FontFamily::Name("semibold".into())
 }
 
-#[derive(Clone, Copy)]
+pub fn body() -> FontId {
+    FontId::new(BODY_SIZE, FontFamily::Proportional)
+}
+
+pub fn small() -> FontId {
+    FontId::new(SMALL_SIZE, FontFamily::Proportional)
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Palette {
     /// Window background.
     pub bg: Color32,
     /// Cards, inputs and the drop zone.
     pub surface: Color32,
+    /// A row under the pointer.
+    pub hover: Color32,
     pub border: Color32,
     pub text: Color32,
     pub muted: Color32,
+    /// Fills: the main button, the selected segment, progress.
     pub accent: Color32,
+    /// Accent-coloured text, dark enough to read on surfaces and on
+    /// `accent_soft`.
+    pub accent_text: Color32,
     /// Text on an accent fill.
     pub on_accent: Color32,
-    /// Accent at low strength, for badges and the drop zone highlight.
+    /// Accent at low strength, for tiles, pills and the drop highlight.
     pub accent_soft: Color32,
     /// Resting fill of secondary buttons.
     pub control: Color32,
     pub control_hover: Color32,
-    /// Unchecked boxes and the slider's track.
+    /// Unchecked boxes, progress tracks and the segmented control's track.
     pub track: Color32,
     pub success: Color32,
+    pub success_soft: Color32,
     pub warn: Color32,
+    pub warn_soft: Color32,
     pub error: Color32,
+    pub error_soft: Color32,
+}
+
+const fn hex(rgb: u32) -> Color32 {
+    Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
 const LIGHT: Palette = Palette {
-    bg: Color32::from_rgb(244, 245, 248),
-    surface: Color32::from_rgb(255, 255, 255),
-    border: Color32::from_rgb(225, 228, 234),
-    text: Color32::from_rgb(24, 28, 37),
-    muted: Color32::from_rgb(104, 112, 126),
-    accent: Color32::from_rgb(47, 107, 255),
-    on_accent: Color32::WHITE,
-    accent_soft: Color32::from_rgb(232, 239, 255),
-    control: Color32::from_rgb(255, 255, 255),
-    control_hover: Color32::from_rgb(236, 239, 245),
-    track: Color32::from_rgb(221, 226, 236),
-    success: Color32::from_rgb(24, 148, 82),
-    warn: Color32::from_rgb(176, 112, 16),
-    error: Color32::from_rgb(207, 58, 58),
+    bg: hex(0xF6F5FA),
+    surface: hex(0xFFFFFF),
+    hover: hex(0xF7F5FD),
+    border: hex(0xE6E3EE),
+    text: hex(0x1B1A22),
+    muted: hex(0x6B6878),
+    accent: hex(0x6B4EFF),
+    accent_text: hex(0x5434E0),
+    on_accent: hex(0xFFFFFF),
+    accent_soft: hex(0xEFEBFF),
+    control: hex(0xFFFFFF),
+    control_hover: hex(0xF2F0F8),
+    track: hex(0xECEAF3),
+    success: hex(0x17794A),
+    success_soft: hex(0xE5F4EC),
+    warn: hex(0x8F5600),
+    warn_soft: hex(0xFBF0DC),
+    error: hex(0xC0302E),
+    error_soft: hex(0xFCEBEA),
 };
 
 const DARK: Palette = Palette {
-    bg: Color32::from_rgb(21, 23, 28),
-    surface: Color32::from_rgb(30, 33, 40),
-    border: Color32::from_rgb(47, 51, 61),
-    text: Color32::from_rgb(232, 234, 239),
-    muted: Color32::from_rgb(150, 157, 170),
-    accent: Color32::from_rgb(86, 136, 255),
-    on_accent: Color32::WHITE,
-    accent_soft: Color32::from_rgb(36, 48, 78),
-    control: Color32::from_rgb(38, 42, 51),
-    control_hover: Color32::from_rgb(48, 53, 64),
-    track: Color32::from_rgb(62, 68, 82),
-    success: Color32::from_rgb(70, 190, 124),
-    warn: Color32::from_rgb(226, 170, 76),
-    error: Color32::from_rgb(240, 110, 110),
+    bg: hex(0x131218),
+    surface: hex(0x1D1B25),
+    hover: hex(0x24222E),
+    border: hex(0x2E2B3A),
+    text: hex(0xECEAF2),
+    muted: hex(0x9B97AB),
+    accent: hex(0x8A74FF),
+    accent_text: hex(0xAD9FFF),
+    on_accent: hex(0x131218),
+    accent_soft: hex(0x2A2447),
+    control: hex(0x25232F),
+    control_hover: hex(0x2F2C3B),
+    track: hex(0x302D3C),
+    success: hex(0x5CCB8F),
+    success_soft: hex(0x1B3328),
+    warn: hex(0xE5AE55),
+    warn_soft: hex(0x3A2E19),
+    error: hex(0xFF8A85),
+    error_soft: hex(0x3E2226),
 };
 
 pub fn palette(ctx: &egui::Context) -> Palette {
@@ -96,7 +136,7 @@ fn visuals(p: Palette, mut v: egui::Visuals) -> egui::Visuals {
     v.menu_corner_radius = CornerRadius::same(CONTROL_RADIUS);
     v.extreme_bg_color = p.surface;
     v.faint_bg_color = p.bg;
-    v.hyperlink_color = p.accent;
+    v.hyperlink_color = p.accent_text;
     v.warn_fg_color = p.warn;
     v.error_fg_color = p.error;
     v.selection.bg_fill = p.accent;
@@ -146,13 +186,13 @@ pub fn apply(ctx: &egui::Context) {
     ctx.all_styles_mut(|style| {
         style.spacing.item_spacing = Vec2::new(8.0, 8.0);
         style.spacing.button_padding = Vec2::new(12.0, 6.0);
-        style.spacing.interact_size.y = 30.0;
+        style.spacing.interact_size.y = CONTROL_HEIGHT;
         style.spacing.slider_width = 150.0;
         style.spacing.icon_width = 18.0;
         style.spacing.combo_width = 110.0;
         for (text_style, size) in [
-            (TextStyle::Body, 14.5),
-            (TextStyle::Button, 14.5),
+            (TextStyle::Body, BODY_SIZE),
+            (TextStyle::Button, BODY_SIZE),
             (TextStyle::Small, 12.0),
             (TextStyle::Heading, 20.0),
         ] {
@@ -166,7 +206,7 @@ pub fn apply(ctx: &egui::Context) {
 /// Uses Windows' Segoe UI for the interface, so the app looks at home, and
 /// adds Windows' East Asian fonts for the display language and Windows'
 /// language (so file names in the user's script show too). egui's built-in
-/// fonts stay as the fallback and supply the symbols.
+/// fonts stay as the fallback.
 pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
     let fonts_dir = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
         .join("Fonts");
@@ -230,33 +270,301 @@ pub fn card(p: Palette) -> egui::Frame {
         .fill(p.surface)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CARD_RADIUS)
-        .inner_margin(egui::Margin::symmetric(14, 12))
+        .inner_margin(egui::Margin::symmetric(16, 12))
 }
 
 /// The one filled button on the screen: the thing to press next.
-pub fn primary_button<'a>(p: Palette, text: impl Into<String>, enabled: bool) -> egui::Button<'a> {
+pub fn primary_button<'a>(p: Palette, text: impl Into<String>, enabled: bool, width: f32) -> egui::Button<'a> {
     let label = egui::RichText::new(text)
         .family(semibold())
         .size(15.5)
         .color(if enabled { p.on_accent } else { p.muted });
     egui::Button::new(label)
-        .fill(if enabled { p.accent } else { p.control_hover })
+        .fill(if enabled { p.accent } else { p.track })
         .stroke(Stroke::NONE)
         .corner_radius(10)
-        .min_size(Vec2::new(230.0, 40.0))
+        .min_size(Vec2::new(width, PRIMARY_HEIGHT))
 }
 
-/// A small rounded label, such as a file's format. Painted at its own size,
-/// so it stays compact whatever the height of the row it sits in.
-pub fn badge(ui: &mut egui::Ui, text: &str, fg: Color32, bg: Color32) {
-    let galley = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), FontId::new(11.0, semibold()), fg);
-    let size = galley.size() + Vec2::new(12.0, 6.0);
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(size.x.max(40.0), size.y), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 5, bg);
+/// A quiet bordered button for everything that is not the next step.
+pub fn secondary_button<'a>(p: Palette, text: impl Into<String>) -> egui::Button<'a> {
+    egui::Button::new(egui::RichText::new(text).color(p.text))
+        .fill(p.control)
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(CONTROL_RADIUS)
+        .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
+}
+
+/// A one-line text cut to `width` with an ellipsis.
+pub fn truncated(
+    painter: &egui::Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+) -> Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
+    painter.layout_job(job)
+}
+
+/// A small rounded label such as a status. Painted with its right edge
+/// centred vertically on `right`; returns the rect it took.
+pub fn pill(painter: &egui::Painter, right: Pos2, text: &str, fg: Color32, bg: Color32, max_width: f32) -> Rect {
+    let galley = truncated(painter, text, FontId::new(12.0, semibold()), fg, max_width - 20.0);
+    let size = vec2(galley.size().x + 20.0, 24.0);
+    let rect = Rect::from_min_size(pos2(right.x - size.x, right.y - size.y / 2.0), size);
+    painter.rect_filled(rect, 12, bg);
+    painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
+    rect
+}
+
+/// The licence state in the toolbar: a pill laid out like a widget.
+pub fn pill_widget(ui: &mut egui::Ui, text: &str, fg: Color32, bg: Color32) -> egui::Response {
+    let max = ui.available_width().max(40.0);
+    let galley = truncated(ui.painter(), text, FontId::new(12.0, semibold()), fg, max - 20.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(galley.size().x + 20.0, 26.0), Sense::hover());
+    ui.painter().rect_filled(rect, 13, bg);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    response
+}
+
+/// Width the pill for `text` would take.
+pub fn pill_width(ui: &egui::Ui, text: &str) -> f32 {
     ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, fg);
+        .layout_no_wrap(text.to_owned(), FontId::new(12.0, semibold()), Color32::WHITE)
+        .size()
+        .x
+        + 20.0
+}
+
+/// Icons drawn with lines, so they never depend on a font having a glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Icon {
+    Close,
+    Play,
+    Folder,
+    Retry,
+}
+
+fn paint_icon(painter: &egui::Painter, centre: Pos2, icon: Icon, color: Color32) {
+    let stroke = Stroke::new(1.6, color);
+    let c = centre;
+    match icon {
+        Icon::Close => {
+            let d = 4.5;
+            painter.line_segment([c + vec2(-d, -d), c + vec2(d, d)], stroke);
+            painter.line_segment([c + vec2(d, -d), c + vec2(-d, d)], stroke);
+        }
+        Icon::Play => {
+            let points = vec![c + vec2(-3.5, -5.5), c + vec2(5.5, 0.0), c + vec2(-3.5, 5.5)];
+            painter.add(Shape::convex_polygon(points, color, Stroke::NONE));
+        }
+        Icon::Folder => {
+            let body = Rect::from_center_size(c + vec2(0.0, 1.0), vec2(14.0, 10.0));
+            painter.rect_stroke(body, 2, stroke, StrokeKind::Middle);
+            let tab = [
+                body.left_top(),
+                body.left_top() + vec2(0.0, -2.5),
+                body.left_top() + vec2(5.0, -2.5),
+                body.left_top() + vec2(6.5, 0.0),
+            ];
+            painter.add(Shape::line(tab.to_vec(), stroke));
+        }
+        Icon::Retry => {
+            // Three quarters of a circle with an arrow head at its end.
+            let r = 5.5;
+            let points: Vec<Pos2> = (0..=18)
+                .map(|i| {
+                    let a = -0.4 + i as f32 / 18.0 * std::f32::consts::PI * 1.6;
+                    c + vec2(a.cos() * r, a.sin() * r)
+                })
+                .collect();
+            let end = c + vec2((-0.4f32).cos() * r, (-0.4f32).sin() * r);
+            painter.add(Shape::line(points, stroke));
+            painter.line_segment([end, end + vec2(-0.5, -4.0)], stroke);
+            painter.line_segment([end, end + vec2(-4.0, 0.5)], stroke);
+        }
+    }
+}
+
+/// A round, borderless icon button with a soft hover disc.
+pub fn icon_button(ui: &mut egui::Ui, rect: Rect, id: egui::Id, icon: Icon, p: Palette) -> egui::Response {
+    let response = ui.interact(rect, id, Sense::click());
+    let hot = ui.ctx().animate_bool_with_time(id, response.hovered(), 0.12);
+    if hot > 0.0 {
+        ui.painter()
+            .circle_filled(rect.center(), rect.width() / 2.0, p.track.gamma_multiply(hot));
+    }
+    let color = if response.hovered() { p.text } else { p.muted };
+    paint_icon(ui.painter(), rect.center(), icon, color);
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The leading tile of a file row: a play triangle for video, sound bars
+/// for audio, and the file's extension underneath.
+pub fn file_tile(painter: &egui::Painter, rect: Rect, video: bool, extension: &str, p: Palette) {
+    painter.rect_filled(rect, 10, p.accent_soft);
+    let glyph = rect.center() - vec2(0.0, 6.0);
+    if video {
+        let points = vec![glyph + vec2(-4.5, -6.0), glyph + vec2(6.5, 0.0), glyph + vec2(-4.5, 6.0)];
+        painter.add(Shape::convex_polygon(points, p.accent, Stroke::NONE));
+    } else {
+        for (i, h) in [6.0, 12.0, 8.0, 11.0].iter().enumerate() {
+            let x = glyph.x - 7.5 + i as f32 * 5.0;
+            let bar = Rect::from_center_size(pos2(x, glyph.y), vec2(2.6, *h));
+            painter.rect_filled(bar, 1.3, p.accent);
+        }
+    }
+    let galley = truncated(painter, extension, FontId::new(9.5, semibold()), p.accent_text, rect.width() - 4.0);
+    painter.galley(
+        pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - 4.0 - galley.size().y),
+        galley,
+        p.accent_text,
+    );
+}
+
+/// Height of bar `i` of `count` in the drop zone's waveform, 0 to 1: a
+/// fixed, speech-like shape, swaying with `phase` while files hover.
+pub fn wave_height(i: usize, count: usize, phase: f32, lively: f32) -> f32 {
+    let x = i as f32 / (count.max(2) - 1) as f32;
+    let envelope = (x * std::f32::consts::PI).sin().max(0.0).powf(0.7);
+    let texture = 0.55 + 0.45 * ((i as f32 * 1.9).sin() * (i as f32 * 0.7).cos()).abs();
+    let sway = 1.0 - lively * 0.35 * (1.0 + (phase * 5.0 + i as f32 * 0.55).sin()) / 2.0;
+    (0.18 + 0.82 * envelope * texture * sway).clamp(0.12, 1.0)
+}
+
+/// The drop zone's waveform motif: rounded vertical bars.
+pub fn waveform(painter: &egui::Painter, rect: Rect, color: Color32, phase: f32, lively: f32) {
+    let count = 25;
+    let gap = rect.width() / count as f32;
+    let width = (gap * 0.5).min(5.0);
+    for i in 0..count {
+        let h = rect.height() * wave_height(i, count, phase, lively);
+        let x = rect.left() + gap * (i as f32 + 0.5);
+        let bar = Rect::from_center_size(pos2(x, rect.center().y), vec2(width, h));
+        painter.rect_filled(bar, width / 2.0, color);
+    }
+}
+
+/// A dashed outline with rounded corners.
+pub fn dashed_rect(painter: &egui::Painter, rect: Rect, radius: f32, stroke: Stroke) {
+    let mut points = Vec::new();
+    let corners = [
+        (pos2(rect.right() - radius, rect.top() + radius), -90.0f32),
+        (pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (pos2(rect.left() + radius, rect.bottom() - radius), 90.0),
+        (pos2(rect.left() + radius, rect.top() + radius), 180.0),
+    ];
+    for (centre, start) in corners {
+        for step in 0..=6 {
+            let a = (start + step as f32 * 15.0).to_radians();
+            points.push(centre + vec2(a.cos(), a.sin()) * radius);
+        }
+    }
+    points.push(points[0]);
+    painter.extend(Shape::dashed_line(&points, stroke, 7.0, 5.0));
+}
+
+/// A rounded progress track. `None` is an unknown amount: a short segment
+/// sweeps along the track instead.
+pub fn progress_track(painter: &egui::Painter, rect: Rect, fraction: Option<f32>, time: f64, p: Palette) {
+    let radius = rect.height() / 2.0;
+    painter.rect_filled(rect, radius, p.track);
+    let fill = match fraction {
+        Some(f) => Rect::from_min_size(rect.min, vec2(rect.width() * f.clamp(0.0, 1.0), rect.height())),
+        None => {
+            let span = rect.width() * 0.3;
+            let t = (time * 0.8).fract() as f32;
+            let left = rect.left() - span + (rect.width() + span) * t;
+            Rect::from_x_y_ranges(left.max(rect.left())..=(left + span).min(rect.right()), rect.y_range())
+        }
+    };
+    if fill.width() > 0.5 {
+        painter.rect_filled(fill, radius, p.accent);
+    }
+}
+
+/// One choice of a segmented control: a label and an optional second,
+/// smaller line (such as a bitrate).
+pub struct Segment<'a> {
+    pub label: &'a str,
+    pub detail: Option<String>,
+}
+
+/// Choices side by side on one track; the chosen one is filled with the
+/// accent, which slides when the choice changes. Returns the newly chosen
+/// index, if any.
+pub fn segmented(ui: &mut egui::Ui, id: egui::Id, segments: &[Segment], selected: usize, p: Palette) -> Option<usize> {
+    let two_lines = segments.iter().any(|s| s.detail.is_some());
+    let height = if two_lines { 44.0 } else { CONTROL_HEIGHT };
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let enabled = ui.is_enabled();
+    let painter = ui.painter();
+    painter.rect_filled(rect, CONTROL_RADIUS, p.track);
+    let n = segments.len().max(1) as f32;
+    let inner = rect.shrink(3.0);
+    let seg_w = inner.width() / n;
+    let slide = ui.ctx().animate_value_with_time(id, selected as f32, 0.15);
+    let knob = Rect::from_min_size(pos2(inner.left() + seg_w * slide, inner.top()), vec2(seg_w, inner.height()));
+    let knob_fill = if enabled { p.accent } else { p.muted };
+    painter.rect_filled(knob, CONTROL_RADIUS - 2, knob_fill);
+    let mut chosen = None;
+    for (i, segment) in segments.iter().enumerate() {
+        let cell = Rect::from_min_size(pos2(inner.left() + seg_w * i as f32, inner.top()), vec2(seg_w, inner.height()));
+        let response = ui.interact(cell, id.with(i), Sense::click());
+        if response.clicked() && i != selected {
+            chosen = Some(i);
+        }
+        let on = i == selected;
+        if response.hovered() && !on {
+            ui.painter().rect_filled(cell, CONTROL_RADIUS - 2, p.surface.gamma_multiply(0.7));
+        }
+        let fg = if on { p.on_accent } else { p.text };
+        let sub = if on { p.on_accent } else { p.muted };
+        let label = truncated(ui.painter(), segment.label, FontId::new(13.5, semibold()), fg, cell.width() - 8.0);
+        match &segment.detail {
+            Some(detail) => {
+                let small = truncated(ui.painter(), detail, FontId::new(11.5, FontFamily::Proportional), sub, cell.width() - 8.0);
+                let top = cell.center().y - (label.size().y + small.size().y) / 2.0;
+                ui.painter().galley(pos2(cell.center().x - label.size().x / 2.0, top), label.clone(), fg);
+                ui.painter().galley(
+                    pos2(cell.center().x - small.size().x / 2.0, top + label.size().y),
+                    small,
+                    sub,
+                );
+            }
+            None => {
+                ui.painter().galley(cell.center() - label.size() / 2.0, label, fg);
+            }
+        }
+        let _ = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    }
+    chosen
+}
+
+/// Text centred in `rect` that reads on both parts of a progress fill:
+/// `on_fill` over the filled part, `color` over the rest.
+pub fn text_over_fill(
+    painter: &egui::Painter,
+    rect: Rect,
+    fill_right: f32,
+    text: &str,
+    color: Color32,
+    on_fill: Color32,
+) {
+    let galley = truncated(painter, text, FontId::new(14.5, semibold()), color, rect.width() - 24.0);
+    let pos = rect.center() - galley.size() / 2.0;
+    let split = fill_right.clamp(rect.left(), rect.right());
+    let (filled, rest) = (
+        Rect::from_x_y_ranges(rect.left()..=split, rect.y_range()),
+        Rect::from_x_y_ranges(split..=rect.right(), rect.y_range()),
+    );
+    painter.with_clip_rect(rest).galley(pos, galley.clone(), color);
+    painter
+        .with_clip_rect(filled)
+        .galley_with_override_text_color(pos, galley, on_fill);
 }
 
 /// A checkbox with squarer corners than the buttons: at this size the
@@ -270,4 +578,78 @@ pub fn checkbox(ui: &mut egui::Ui, checked: &mut bool, text: impl Into<egui::Wid
         ui.checkbox(checked, text)
     })
     .inner
+}
+
+/// WCAG 2 contrast ratio between two colours (1 to 21).
+#[cfg(test)]
+fn contrast(a: Color32, b: Color32) -> f32 {
+    fn channel(c: u8) -> f32 {
+        let c = c as f32 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn luminance(c: Color32) -> f32 {
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    }
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contrast_of_known_pairs() {
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.01);
+    }
+
+    /// Every text colour reaches WCAG AA (4.5:1) on what it is drawn on.
+    #[test]
+    fn text_is_readable_in_both_palettes() {
+        for (name, p) in [("light", LIGHT), ("dark", DARK)] {
+            let pairs = [
+                ("text/bg", p.text, p.bg),
+                ("text/surface", p.text, p.surface),
+                ("text/hover", p.text, p.hover),
+                ("text/track", p.text, p.track),
+                ("muted/bg", p.muted, p.bg),
+                ("muted/surface", p.muted, p.surface),
+                ("muted/hover", p.muted, p.hover),
+                ("muted/track", p.muted, p.track),
+                ("on_accent/accent", p.on_accent, p.accent),
+                ("accent_text/surface", p.accent_text, p.surface),
+                ("accent_text/accent_soft", p.accent_text, p.accent_soft),
+                ("success/surface", p.success, p.surface),
+                ("warn/surface", p.warn, p.surface),
+                ("error/surface", p.error, p.surface),
+                ("success/success_soft", p.success, p.success_soft),
+                ("warn/warn_soft", p.warn, p.warn_soft),
+                ("error/error_soft", p.error, p.error_soft),
+                ("text/control", p.text, p.control),
+            ];
+            for (pair, fg, bg) in pairs {
+                let ratio = contrast(fg, bg);
+                assert!(ratio >= 4.5, "{name} {pair}: {ratio:.2}");
+            }
+        }
+    }
+
+    #[test]
+    fn waveform_bars_stay_in_range() {
+        for lively in [0.0, 1.0] {
+            for phase in [0.0, 0.7, 3.1] {
+                for i in 0..25 {
+                    let h = wave_height(i, 25, phase, lively);
+                    assert!((0.12..=1.0).contains(&h), "{i} {phase} {lively}: {h}");
+                }
+            }
+        }
+        // The middle is taller than the ends, like speech.
+        assert!(wave_height(12, 25, 0.0, 0.0) > wave_height(0, 25, 0.0, 0.0));
+    }
 }

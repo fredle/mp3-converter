@@ -4,19 +4,74 @@
 
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use windows::Win32::Media::MediaFoundation::{
     IMFMediaType, IMFSample, IMFSinkWriter, IMFSourceReader, MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
     MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_MT_AUDIO_NUM_CHANNELS,
-    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_PD_DURATION,
     MF_SOURCE_READER_ALL_STREAMS, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MFAudioFormat_AAC, MFAudioFormat_FLAC,
-    MFAudioFormat_MP3, MFAudioFormat_PCM, MFCreateMediaType, MFCreateSinkWriterFromURL,
-    MFCreateSourceReaderFromURL, MFMediaType_Audio, MFSTARTUP_LITE, MFStartup,
-    MFT_ENUM_FLAG_ALL, MFTranscodeGetAudioOutputAvailableTypes,
+    MF_SOURCE_READER_MEDIASOURCE, MF_SOURCE_READERF_ENDOFSTREAM, MF_VERSION, MFAudioFormat_AAC,
+    MFAudioFormat_FLAC, MFAudioFormat_MP3, MFAudioFormat_PCM, MFCreateMediaType,
+    MFCreateSinkWriterFromURL, MFCreateSourceReaderFromURL, MFMediaType_Audio, MFSTARTUP_LITE,
+    MFStartup, MFT_ENUM_FLAG_ALL, MFTranscodeGetAudioOutputAvailableTypes,
 };
+use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+use windows::Win32::System::Variant::VT_UI8;
 use windows::core::{GUID, HSTRING, Interface};
+
+/// How far one conversion has got, and whether to stop. Shared between the
+/// worker converting a file and the window showing it.
+#[derive(Default, Debug)]
+pub struct Progress {
+    /// Thousandths done.
+    permille: AtomicU32,
+    /// Whether the source's length is known, so `permille` means something.
+    known: AtomicBool,
+    /// Whether a worker has picked the file up.
+    started: AtomicBool,
+    cancel: AtomicBool,
+}
+
+impl Progress {
+    fn begin(&self, known: bool) {
+        self.known.store(known, Ordering::Relaxed);
+        self.started.store(true, Ordering::Relaxed);
+    }
+
+    fn set(&self, permille: u32) {
+        self.permille.store(permille.min(1000), Ordering::Relaxed);
+    }
+
+    /// 0.0 to 1.0, or `None` when the length is unknown.
+    pub fn fraction(&self) -> Option<f32> {
+        self.known
+            .load(Ordering::Relaxed)
+            .then(|| self.permille.load(Ordering::Relaxed) as f32 / 1000.0)
+    }
+
+    pub fn started(&self) -> bool {
+        self.started.load(Ordering::Relaxed)
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+}
+
+/// Thousandths of `duration` reached at `position` (both in 100 ns units),
+/// held below 1000 until the file is really finished.
+pub fn permille(position: i64, duration: u64) -> u32 {
+    if duration == 0 || position <= 0 {
+        return 0;
+    }
+    ((position as u128 * 1000 / duration as u128) as u32).min(999)
+}
 
 /// What to write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +89,8 @@ pub enum MfError {
     /// Windows has no reader for this file: unknown, damaged, or a format
     /// that needs a codec extension.
     Unreadable(String),
+    /// Stopped on request; nothing was written.
+    Cancelled,
     Other(String),
 }
 
@@ -52,9 +109,10 @@ const INVALID_STREAM: u32 = 0xC00D_36B3;
 /// The sample rate and channel count a target can hold, nearest to the
 /// source's. MP3 and AAC take mono or stereo at 44.1 or 48 kHz; FLAC and WAV
 /// keep the rate and up to stereo is kept as is (more channels are mixed
-/// down to stereo so the file plays everywhere).
-pub fn output_shape(target: Target, rate: u32, channels: u32) -> (u32, u32) {
-    let channels = channels.clamp(1, 2);
+/// down to stereo so the file plays everywhere). `mono` mixes everything
+/// down to one channel, for speech.
+pub fn output_shape(target: Target, rate: u32, channels: u32, mono: bool) -> (u32, u32) {
+    let channels = if mono { 1 } else { channels.clamp(1, 2) };
     let rate = match target {
         Target::Mp3 { .. } | Target::M4a { .. } => {
             if rate == 48_000 || rate == 96_000 || rate == 24_000 || rate == 12_000 || rate == 8_000
@@ -140,6 +198,53 @@ fn open_reader(source: &Path) -> Result<(IMFSourceReader, u32, u32), MfError> {
     }
 }
 
+/// The source's length in 100 ns units, when the file says.
+fn duration(reader: &IMFSourceReader) -> Option<u64> {
+    unsafe {
+        let mut value = reader
+            .GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
+            .ok()?;
+        let inner = &value.Anonymous.Anonymous;
+        let length = (inner.vt == VT_UI8).then(|| inner.Anonymous.uhVal);
+        let _ = PropVariantClear(&mut value);
+        length.filter(|d| *d > 0)
+    }
+}
+
+/// What the window shows about a file before converting it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Info {
+    /// Length in seconds, when known.
+    pub seconds: Option<f64>,
+    pub rate: u32,
+    pub channels: u32,
+}
+
+/// Opens `source` just far enough to learn its length and audio shape.
+/// `None` when Windows cannot read its audio.
+pub fn probe(source: &Path) -> Option<Info> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        MFStartup(MF_VERSION, MFSTARTUP_LITE).ok()?;
+    }
+    let (reader, rate, channels) = open_reader(source).ok()?;
+    Some(Info {
+        seconds: duration(&reader).map(|d| d as f64 / 10_000_000.0),
+        rate,
+        channels,
+    })
+}
+
+/// Records how far `sample` reaches into a file `length` long.
+fn report(progress: &Progress, sample: &IMFSample, length: Option<u64>) {
+    let Some(length) = length else { return };
+    unsafe {
+        let start = sample.GetSampleTime().unwrap_or(0);
+        let span = sample.GetSampleDuration().unwrap_or(0);
+        progress.set(permille(start.saturating_add(span), length));
+    }
+}
+
 /// Reads the next block of audio, or `None` at the end of the file.
 fn next_sample(reader: &IMFSourceReader) -> Result<Option<IMFSample>, MfError> {
     unsafe {
@@ -159,23 +264,43 @@ fn next_sample(reader: &IMFSourceReader) -> Result<Option<IMFSample>, MfError> {
 }
 
 /// Converts the first audio track of `source` into `dest`. `dest` must not
-/// exist; on failure nothing is left behind.
-pub fn transcode(source: &Path, dest: &Path, target: Target) -> Result<(), MfError> {
-    let result = transcode_inner(source, dest, target);
+/// exist; on failure or cancel nothing is left behind. `progress` is
+/// updated as the audio is read and checked for a cancel between blocks.
+pub fn transcode(
+    source: &Path,
+    dest: &Path,
+    target: Target,
+    mono: bool,
+    progress: &Progress,
+) -> Result<(), MfError> {
+    let result = transcode_inner(source, dest, target, mono, progress);
     if result.is_err() {
         let _ = std::fs::remove_file(dest);
+    } else {
+        progress.set(1000);
     }
     result
 }
 
-fn transcode_inner(source: &Path, dest: &Path, target: Target) -> Result<(), MfError> {
+fn transcode_inner(
+    source: &Path,
+    dest: &Path,
+    target: Target,
+    mono: bool,
+    progress: &Progress,
+) -> Result<(), MfError> {
     unsafe {
         // Both are per-thread/process reference counted and safe to repeat.
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         MFStartup(MF_VERSION, MFSTARTUP_LITE)?;
 
         let (reader, source_rate, source_channels) = open_reader(source)?;
-        let (rate, channels) = output_shape(target, source_rate, source_channels);
+        let length = duration(&reader);
+        progress.begin(length.is_some());
+        if progress.cancelled() {
+            return Err(MfError::Cancelled);
+        }
+        let (rate, channels) = output_shape(target, source_rate, source_channels, mono);
         // The reader decodes, resamples and mixes down to exactly this.
         let pcm = pcm_type(rate, channels)?;
         // Fails when Windows has no decoder for the track (Dolby Digital on
@@ -186,7 +311,7 @@ fn transcode_inner(source: &Path, dest: &Path, target: Target) -> Result<(), MfE
         reader.SetStreamSelection(FIRST_AUDIO, true)?;
 
         if target == Target::Wav {
-            return write_wav(&reader, dest, rate, channels);
+            return write_wav(&reader, dest, rate, channels, progress, length);
         }
         let out_type = match target {
             Target::Mp3 { kbps } => encoder_type(&MFAudioFormat_MP3, rate, channels, kbps)?,
@@ -207,7 +332,11 @@ fn transcode_inner(source: &Path, dest: &Path, target: Target) -> Result<(), MfE
         writer.BeginWriting()?;
         let mut wrote = false;
         while let Some(sample) = next_sample(&reader)? {
+            if progress.cancelled() {
+                return Err(MfError::Cancelled);
+            }
             writer.WriteSample(stream, &sample)?;
+            report(progress, &sample, length);
             wrote = true;
         }
         if !wrote {
@@ -219,13 +348,24 @@ fn transcode_inner(source: &Path, dest: &Path, target: Target) -> Result<(), MfE
 }
 
 /// WAV is simple enough to write directly: a 44-byte header, then the PCM.
-fn write_wav(reader: &IMFSourceReader, dest: &Path, rate: u32, channels: u32) -> Result<(), MfError> {
+fn write_wav(
+    reader: &IMFSourceReader,
+    dest: &Path,
+    rate: u32,
+    channels: u32,
+    progress: &Progress,
+    length: Option<u64>,
+) -> Result<(), MfError> {
     let io = |e: std::io::Error| MfError::Other(e.to_string());
     let file = std::fs::File::create(dest).map_err(io)?;
     let mut out = std::io::BufWriter::new(file);
     out.write_all(&wav_header(rate, channels, 0)).map_err(io)?;
     let mut bytes: u64 = 0;
     while let Some(sample) = next_sample(reader)? {
+        if progress.cancelled() {
+            return Err(MfError::Cancelled);
+        }
+        report(progress, &sample, length);
         unsafe {
             let buffer = sample.ConvertToContiguousBuffer()?;
             let mut data = std::ptr::null_mut();
@@ -276,18 +416,53 @@ mod tests {
     #[test]
     fn lossy_targets_use_44_or_48_khz_mono_or_stereo() {
         let mp3 = Target::Mp3 { kbps: 192 };
-        assert_eq!(output_shape(mp3, 44_100, 2), (44_100, 2));
-        assert_eq!(output_shape(mp3, 48_000, 6), (48_000, 2));
-        assert_eq!(output_shape(mp3, 22_050, 1), (44_100, 1));
-        assert_eq!(output_shape(mp3, 96_000, 2), (48_000, 2));
-        assert_eq!(output_shape(Target::M4a { kbps: 128 }, 11_025, 0), (44_100, 1));
+        assert_eq!(output_shape(mp3, 44_100, 2, false), (44_100, 2));
+        assert_eq!(output_shape(mp3, 48_000, 6, false), (48_000, 2));
+        assert_eq!(output_shape(mp3, 22_050, 1, false), (44_100, 1));
+        assert_eq!(output_shape(mp3, 96_000, 2, false), (48_000, 2));
+        assert_eq!(output_shape(Target::M4a { kbps: 128 }, 11_025, 0, false), (44_100, 1));
     }
 
     #[test]
     fn lossless_targets_keep_the_sample_rate() {
-        assert_eq!(output_shape(Target::Flac, 22_050, 1), (22_050, 1));
-        assert_eq!(output_shape(Target::Wav, 48_000, 8), (48_000, 2));
-        assert_eq!(output_shape(Target::Wav, 192_000, 2), (96_000, 2));
+        assert_eq!(output_shape(Target::Flac, 22_050, 1, false), (22_050, 1));
+        assert_eq!(output_shape(Target::Wav, 48_000, 8, false), (48_000, 2));
+        assert_eq!(output_shape(Target::Wav, 192_000, 2, false), (96_000, 2));
+    }
+
+    #[test]
+    fn mono_forces_one_channel_for_every_target() {
+        for target in [Target::Mp3 { kbps: 96 }, Target::M4a { kbps: 64 }, Target::Flac, Target::Wav] {
+            assert_eq!(output_shape(target, 48_000, 6, true).1, 1, "{target:?}");
+            assert_eq!(output_shape(target, 44_100, 1, true).1, 1, "{target:?}");
+        }
+        assert_eq!(output_shape(Target::Wav, 22_050, 2, true), (22_050, 1));
+    }
+
+    #[test]
+    fn permille_follows_the_position_and_stops_short_of_done() {
+        assert_eq!(permille(0, 1000), 0);
+        assert_eq!(permille(-5, 1000), 0);
+        assert_eq!(permille(250, 1000), 250);
+        assert_eq!(permille(1000, 1000), 999);
+        assert_eq!(permille(5000, 1000), 999);
+        assert_eq!(permille(10, 0), 0);
+        // Hours of audio in 100 ns units do not overflow.
+        assert_eq!(permille(18_000_000_000_000, 36_000_000_000_000), 500);
+    }
+
+    #[test]
+    fn progress_reports_unknown_until_a_length_is_known() {
+        let p = Progress::default();
+        assert_eq!(p.fraction(), None);
+        assert!(!p.started());
+        p.begin(true);
+        p.set(420);
+        assert_eq!(p.fraction(), Some(0.42));
+        assert!(p.started());
+        assert!(!p.cancelled());
+        p.cancel();
+        assert!(p.cancelled());
     }
 
     #[test]

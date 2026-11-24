@@ -11,6 +11,7 @@ mod i18n;
 mod license;
 mod mf;
 mod settings;
+mod tags;
 mod theme;
 mod update;
 
