@@ -87,6 +87,8 @@ in %LOCALAPPDATA%\Mp3Converter\settings.json. Nothing else is kept.
 Network: a version check against GitHub Releases about once a day, which the
 user can turn off. No audio, video, file names or usage data are sent anywhere.
 
+Feedback: the "What would make this better?" link in the window lets you send the developer a short note. Only the note, the app's name and version, and the platform are sent, to the developer's server at feedback.leatham.net, and only when you press Send. No name, email address or device identifier is sent, and the server does not keep IP addresses. Notes are used only to improve the app and are never shared or sold.
+
 ## Screenshot ideas
 
 1. The window with a dropped folder of MP4 videos listed with their lengths and sizes, MP3 chosen, the size estimate and "Convert 12 files" ready.

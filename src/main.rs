@@ -6,6 +6,7 @@
 #![windows_subsystem = "windows"]
 
 mod app;
+mod feedback;
 mod convert;
 mod i18n;
 mod license;
