@@ -10,6 +10,7 @@
 mod app;
 mod feedback;
 mod convert;
+mod edits;
 mod i18n;
 mod license;
 mod mf;

@@ -35,7 +35,6 @@ pub struct Span {
     pub end: Option<f64>,
 }
 
-#[allow(dead_code)] // NONE and is_none are for the window.
 impl Trim {
     /// Everything: the default.
     pub const NONE: Trim = Trim {

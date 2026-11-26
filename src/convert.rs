@@ -388,6 +388,7 @@ fn is_container_signature(head: &[u8], codec: Codec) -> bool {
 
 /// Converts one file, whole, from its first audio track, and returns where
 /// it was written. `progress` follows the conversion and can cancel it.
+#[cfg(test)]
 pub fn convert_file(
     source: &Path,
     options: &Options,

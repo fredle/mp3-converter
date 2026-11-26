@@ -21,6 +21,9 @@ pub struct Settings {
     /// Mix everything down to one channel (for speech).
     #[serde(default)]
     pub mono: bool,
+    /// Normalise every file that has no volume choice of its own.
+    #[serde(default)]
+    pub louder: bool,
     /// Folder for converted files; `None` writes next to each original.
     #[serde(default)]
     pub out_dir: Option<std::path::PathBuf>,
@@ -48,6 +51,7 @@ impl Default for Settings {
             format: Default::default(),
             kbps: default_kbps(),
             mono: false,
+            louder: false,
             out_dir: None,
             license_key: String::new(),
             language: None,

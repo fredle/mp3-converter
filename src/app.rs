@@ -15,9 +15,10 @@ use eframe::egui::{
 };
 
 use crate::convert::{Codec, ConvertError, Format, Options, format_duration, format_size};
+use crate::edits::{FileEdit, Problem};
 use crate::i18n::{Lang, Strings, fill};
 use crate::license;
-use crate::mf::{Info, Progress};
+use crate::mf::{AudioTrack, Edits, Info, Progress};
 use crate::theme::{self, ButtonKind, Icon, Palette, Segment, StatusKind};
 
 const WIDTH: f32 = 760.0;
@@ -33,12 +34,13 @@ const PANIC_MESSAGE: &str = "decoder panicked";
 /// Space between the window edge and its contents.
 const GUTTER: i8 = 16;
 const ROW_HEIGHT: f32 = 52.0;
+/// What an expanded row adds under its name: two lines of controls.
+const STRIP_HEIGHT: f32 = 2.0 * theme::CONTROL_HEIGHT + STRIP_GAP + 14.0;
+const STRIP_GAP: f32 = 8.0;
 /// Width of one row icon button with its gap.
 const ACTION_SLOT: f32 = 32.0;
-/// Shown in the empty state; the file dialog lists every type.
-const FORMATS: [&str; 11] = [
-    "MP4", "MOV", "MKV", "AVI", "WMV", "WebM", "MP3", "M4A", "WAV", "FLAC", "OGG",
-];
+/// Width of a start or end time field.
+const TIME_FIELD: f32 = 84.0;
 /// How often the window redraws while converting.
 const BUSY_REPAINT: Duration = Duration::from_millis(100);
 const SETTINGS_WIDTH: f32 = 300.0;
@@ -73,6 +75,17 @@ enum Status {
     Failed(ConvertError),
 }
 
+/// A file's audio tracks, read on their own thread when its row is first
+/// expanded.
+#[derive(Clone, Debug, PartialEq)]
+enum Tracks {
+    NotAsked,
+    Loading,
+    Known(Vec<AudioTrack>),
+    /// Windows could not list them; converting will say why.
+    Unknown,
+}
+
 /// What is known about a file's audio before converting it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Probe {
@@ -95,9 +108,65 @@ struct Item {
     progress: Arc<Progress>,
     /// Screenshot mode only: progress to show instead of `progress`.
     staged: Option<f32>,
+    /// This file's own trim, track and volume.
+    edit: FileEdit,
+    tracks: Tracks,
 }
 
 impl Item {
+    fn new(id: u64, path: PathBuf) -> Self {
+        Self {
+            id,
+            path,
+            status: Status::Waiting,
+            probe: Probe::Pending,
+            size: None,
+            out_size: None,
+            progress: Arc::default(),
+            staged: None,
+            edit: FileEdit::default(),
+            tracks: Tracks::NotAsked,
+        }
+    }
+
+    fn seconds(&self) -> Option<f64> {
+        match self.probe {
+            Probe::Known(info) => info.seconds,
+            _ => None,
+        }
+    }
+
+    /// Why this file's trim cannot be used, if it cannot.
+    fn problem(&self) -> Option<Problem> {
+        self.edit.check(self.seconds()).err()
+    }
+
+    /// Waiting, with choices a conversion can use.
+    fn ready(&self) -> bool {
+        self.status == Status::Waiting && self.problem().is_none()
+    }
+
+    /// Whether its choices can still change: not while it converts, and not
+    /// once it is done.
+    fn editable(&self) -> bool {
+        matches!(self.status, Status::Waiting | Status::Failed(_))
+    }
+
+    /// Expected output size with the file's trim, when it can be known.
+    fn estimate(&self, format: Format, kbps: u32, mono: bool) -> Option<u64> {
+        let Probe::Known(info) = self.probe else { return None };
+        let trim = self.edit.trim().ok()?;
+        crate::convert::estimate_bytes(format, kbps, mono, &info.trimmed(&trim))
+    }
+
+    fn height(&self) -> f32 {
+        if self.edit.expanded {
+            ROW_HEIGHT + STRIP_HEIGHT
+        } else {
+            ROW_HEIGHT
+        }
+    }
+
     /// Whether converting has begun, and how far it is (when known).
     fn progress(&self) -> (bool, Option<f32>) {
         match self.staged {
@@ -110,11 +179,15 @@ impl Item {
 struct Job {
     id: u64,
     path: PathBuf,
+    edits: Edits,
     progress: Arc<Progress>,
 }
 
 type JobResult = (u64, Result<(PathBuf, u64), ConvertError>);
+/// (item, file, audio track) to probe.
+type ProbeRequest = (u64, PathBuf, usize);
 type ProbeResult = (u64, Option<Info>, Option<u64>);
+type TrackResult = (u64, Option<Vec<AudioTrack>>);
 
 /// One press of Convert, until its last file finishes.
 struct Run {
@@ -134,11 +207,12 @@ struct Summary {
     out_bytes: u64,
 }
 
-/// One-click starting points that set format, quality and mono together.
-/// The detailed controls stay and show what was chosen.
+/// One-click starting points that set format, quality, mono and "Make
+/// louder" together. The detailed controls stay and show what was chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Preset {
-    /// Speech: MP3, mono, the Standard step (96 kbps mono).
+    /// Speech: MP3, mono, the Standard step (96 kbps mono), made louder
+    /// (voice recordings are often quiet).
     Voice,
     /// MP3, stereo, the High step (256 kbps).
     Music,
@@ -150,14 +224,15 @@ enum Preset {
 impl Preset {
     const ALL: [Preset; 3] = [Preset::Voice, Preset::Music, Preset::Smallest];
 
-    /// (format, stored kbps, mono). The stored kbps is a stereo rate; mono
-    /// uses the same step of the mono list (see `Format::effective_kbps`).
-    fn settings(self) -> (Format, u32, bool) {
-        match self {
-            Preset::Voice => (Format::Mp3, 192, true),
-            Preset::Music => (Format::Mp3, 256, false),
-            Preset::Smallest => (Format::M4a, 96, false),
-        }
+    /// The options it sets. The stored kbps is a stereo rate; mono uses the
+    /// same step of the mono list (see `Format::effective_kbps`).
+    fn settings(self) -> Choice {
+        let (format, kbps, mono, louder) = match self {
+            Preset::Voice => (Format::Mp3, 192, true, true),
+            Preset::Music => (Format::Mp3, 256, false, false),
+            Preset::Smallest => (Format::M4a, 96, false, false),
+        };
+        Choice { format, kbps, mono, louder }
     }
 
     fn label(self, t: &Strings) -> &'static str {
@@ -168,27 +243,90 @@ impl Preset {
         }
     }
 
-    /// What it sets, for the tooltip: "MP3 · 96 kbps · Mono (voice)".
+    /// What it sets, for the tooltip: "MP3 · 96 kbps · Mono (voice) ·
+    /// Make louder".
     fn describe(self, t: &Strings) -> String {
-        let (format, kbps, mono) = self.settings();
-        let mut parts = vec![format.label().to_owned()];
-        let rate = format.effective_kbps(kbps, mono);
+        let c = self.settings();
+        let mut parts = vec![c.format.label().to_owned()];
+        let rate = c.format.effective_kbps(c.kbps, c.mono);
         if rate > 0 {
             parts.push(format!("{rate} kbps"));
         }
-        if mono {
+        if c.mono {
             parts.push(t.mono.to_owned());
+        }
+        if c.louder {
+            parts.push(t.louder.to_owned());
         }
         parts.join(" · ")
     }
 }
 
-/// The preset the current options match, if any.
-fn preset_of(format: Format, kbps: u32, mono: bool) -> Option<Preset> {
+/// The options a preset sets, and that the options card shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Choice {
+    format: Format,
+    kbps: u32,
+    mono: bool,
+    /// "Make louder" for every file without a choice of its own.
+    louder: bool,
+}
+
+impl Choice {
+    fn of(settings: &crate::settings::Settings) -> Self {
+        Self {
+            format: settings.format,
+            kbps: settings.kbps,
+            mono: settings.mono,
+            louder: settings.louder,
+        }
+    }
+
+    fn apply(self, settings: &mut crate::settings::Settings) {
+        settings.format = self.format;
+        settings.kbps = self.kbps;
+        settings.mono = self.mono;
+        settings.louder = self.louder;
+    }
+}
+
+/// The preset the current options match, if any: every option it sets,
+/// the quality as a step.
+fn preset_of(choice: Choice) -> Option<Preset> {
     Preset::ALL.into_iter().find(|preset| {
-        let (f, k, m) = preset.settings();
-        f == format && m == mono && (f.bitrates().is_empty() || f.tier(k) == format.tier(kbps))
+        let c = preset.settings();
+        c.format == choice.format
+            && c.mono == choice.mono
+            && c.louder == choice.louder
+            && (c.format.bitrates().is_empty() || c.format.tier(c.kbps) == choice.format.tier(choice.kbps))
     })
+}
+
+/// Files forwarded from another launch join the queue now, or wait in
+/// `pending` while a run is going (the queue takes no files then); none
+/// is ever dropped.
+fn take_forwarded(pending: &mut Vec<PathBuf>, incoming: Vec<PathBuf>, busy: bool) -> Vec<PathBuf> {
+    pending.extend(incoming);
+    if busy { Vec::new() } else { std::mem::take(pending) }
+}
+
+/// The rows that show in a scroll view from `top` to `bottom`, given each
+/// row's height in order.
+fn visible_rows(heights: &[f32], top: f32, bottom: f32) -> std::ops::Range<usize> {
+    let mut y = 0.0;
+    let mut first = heights.len();
+    let mut end = heights.len();
+    for (i, h) in heights.iter().enumerate() {
+        if first == heights.len() && y + h > top {
+            first = i;
+        }
+        if y >= bottom {
+            end = i;
+            break;
+        }
+        y += h;
+    }
+    first.min(end)..end
 }
 
 /// The Store's "write a review" page for `store_id`, when it looks like a
@@ -222,7 +360,8 @@ fn primary_label(t: &Strings, waiting: usize, allowance: usize) -> String {
 /// closes. The first three (a queue ready to convert, the same queue
 /// converted, the empty window) are the Store's; `MAC_SHOTS_ALL=1` adds
 /// design-review scenes (drop highlight, the free limit, converting,
-/// Settings, failures, keyboard focus). `MAC_SHOTS_LANG=<locale>` picks the language,
+/// Settings, failures, keyboard focus, a row expanded with its own trim,
+/// track and volume). `MAC_SHOTS_LANG=<locale>` picks the language,
 /// `MAC_SHOTS_SCALE` the pixels per point (on a display at 100%) and
 /// `MAC_SHOTS_MIN=1` the smallest window. Nothing is converted and no
 /// setting is saved. app-factory's `tools/compose-screenshot.ps1` turns the
@@ -243,7 +382,7 @@ struct Shots {
 
 const SHOT_SIZE: [f32; 2] = [680.0, 640.0];
 const STORE_SCENES: usize = 3;
-const ALL_SCENES: usize = 9;
+const ALL_SCENES: usize = 10;
 /// (file name, seconds, bytes) of the made-up queue.
 const SHOT_FILES: [(&str, f64, u64); 8] = [
     ("Guitar lesson.mov", 768.0, 432_013_312),
@@ -283,6 +422,25 @@ enum RowAction {
     Retry,
     Play,
     Reveal,
+    /// The expander was pressed (the row has already changed).
+    Toggle,
+    /// Another audio track was chosen: read its length again.
+    TrackChanged,
+}
+
+/// What every row draws with.
+struct RowLook<'a> {
+    p: Palette,
+    t: &'a Strings,
+    idle: bool,
+    time: f64,
+    /// Room for the most buttons any row has, so the badges line up.
+    actions_width: f32,
+    /// The options' "Make louder", for rows without a choice of their own.
+    louder: bool,
+    format: Format,
+    kbps: u32,
+    mono: bool,
 }
 
 pub struct App {
@@ -292,8 +450,14 @@ pub struct App {
     feedback: crate::feedback::Feedback,
     items: Vec<Item>,
     next_id: u64,
-    probe_requests: Sender<(u64, PathBuf)>,
+    probe_requests: Sender<ProbeRequest>,
     probe_results: Receiver<ProbeResult>,
+    track_requests: Sender<(u64, PathBuf)>,
+    track_results: Receiver<TrackResult>,
+    /// Files forwarded by later launches while a run was going.
+    forwarded: Vec<PathBuf>,
+    /// A row just expanded, to scroll into view once it has its height.
+    reveal_row: Option<u64>,
     run: Option<Run>,
     summary: Option<Summary>,
     /// Folder of the most recent successful conversion, for "Open folder".
@@ -327,6 +491,8 @@ impl App {
             None => (settings, licensed_to, lang),
         };
         theme::apply(ctx);
+        // Files forwarded by later launches wake this window.
+        crate::shell::attach(ctx);
         theme::install_fonts(ctx, &[lang, Lang::system()]);
         // For checking both looks without changing Windows' setting.
         match std::env::var("HWC_THEME").as_deref() {
@@ -335,6 +501,7 @@ impl App {
             _ => {}
         }
         let (probe_requests, probe_results) = spawn_prober(ctx.clone());
+        let (track_requests, track_results) = spawn_track_reader(ctx.clone());
         let mut app = Self {
             lang,
             t: lang.strings(),
@@ -349,6 +516,10 @@ impl App {
             next_id: 0,
             probe_requests,
             probe_results,
+            track_requests,
+            track_results,
+            forwarded: Vec::new(),
+            reveal_row: None,
             run: None,
             summary: None,
             last_output_dir: None,
@@ -367,8 +538,12 @@ impl App {
                 .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned());
             return app;
         }
-        // Files passed on the command line ("Open with", or dropped on the exe).
-        let paths: Vec<PathBuf> = args.into_iter().map(PathBuf::from).collect();
+        // Files passed on the command line ("Open with", Explorer's verb, or
+        // dropped on the exe); flags such as --auto-update are not files.
+        let paths: Vec<PathBuf> = crate::shell::file_args(&args)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
         app.add_paths(&paths);
         app
     }
@@ -401,17 +576,8 @@ impl App {
             self.next_id += 1;
             // Length and size are read on the prober's thread, so a folder
             // of hundreds of files never stalls the window.
-            let _ = self.probe_requests.send((id, path.clone()));
-            self.items.push(Item {
-                id,
-                path,
-                status: Status::Waiting,
-                probe: Probe::Pending,
-                size: None,
-                out_size: None,
-                progress: Arc::default(),
-                staged: None,
-            });
+            let _ = self.probe_requests.send((id, path.clone(), 0));
+            self.items.push(Item::new(id, path));
         }
     }
 
@@ -432,6 +598,20 @@ impl App {
         }
     }
 
+    fn look<'a>(&self, p: Palette, t: &'a Strings, time: f64, actions_width: f32) -> RowLook<'a> {
+        RowLook {
+            p,
+            t,
+            idle: !self.busy(),
+            time,
+            actions_width,
+            louder: self.settings.louder,
+            format: self.settings.format,
+            kbps: self.settings.kbps,
+            mono: self.settings.mono,
+        }
+    }
+
     fn options(&self) -> Options {
         Options {
             format: self.settings.format,
@@ -441,11 +621,10 @@ impl App {
         }
     }
 
+    /// Files the next run can take: waiting, with choices that fit the file.
+    /// A file whose trim does not fit waits, with its row saying why.
     fn waiting(&self) -> usize {
-        self.items
-            .iter()
-            .filter(|i| i.status == Status::Waiting)
-            .count()
+        self.items.iter().filter(|i| i.ready()).count()
     }
 
     fn allowance(&self) -> usize {
@@ -460,20 +639,26 @@ impl App {
             return;
         }
         let allowance = self.allowance();
+        let louder = self.settings.louder;
         let mut jobs = VecDeque::new();
         for item in &mut self.items {
             if jobs.len() == allowance {
                 break;
             }
-            if item.status == Status::Waiting {
-                item.status = Status::Converting;
-                item.progress = Arc::default();
-                jobs.push_back(Job {
-                    id: item.id,
-                    path: item.path.clone(),
-                    progress: item.progress.clone(),
-                });
+            if item.status != Status::Waiting {
+                continue;
             }
+            let Ok(edits) = item.edit.edits(item.seconds(), louder) else {
+                continue;
+            };
+            item.status = Status::Converting;
+            item.progress = Arc::default();
+            jobs.push_back(Job {
+                id: item.id,
+                path: item.path.clone(),
+                edits,
+                progress: item.progress.clone(),
+            });
         }
         if jobs.is_empty() {
             return;
@@ -515,7 +700,8 @@ impl App {
     /// Sets up scene `scene` of the screenshots: 0 ready, 1 converted,
     /// 2 empty, then (design review) 3 files dragged over the empty window,
     /// 4 more files than a free run takes, 5 converting, 6 Settings open,
-    /// 7 a run with failures, 8 keyboard focus on a preset.
+    /// 7 a run with failures, 8 keyboard focus on a preset, 9 a row expanded
+    /// (a trim, two audio tracks, Make louder) above one with its own trim.
     fn show_scene(&mut self, scene: usize) {
         self.items.clear();
         self.summary = None;
@@ -523,14 +709,11 @@ impl App {
         self.run = None;
         self.settings_open = scene == 6;
         // The focus scene also shows a preset chosen.
-        let (format, kbps, mono) = match scene {
+        let choice = match scene {
             8 => Preset::Voice.settings(),
-            _ => {
-                let d = crate::settings::Settings::default();
-                (d.format, d.kbps, d.mono)
-            }
+            _ => Choice::of(&crate::settings::Settings::default()),
         };
-        (self.settings.format, self.settings.kbps, self.settings.mono) = (format, kbps, mono);
+        choice.apply(&mut self.settings);
         if let Some(shots) = self.shots.as_mut() {
             shots.dragging = scene == 3;
         }
@@ -564,16 +747,36 @@ impl App {
                 (7, _) => (Status::Failed(ConvertError::MissingCodec(Codec::WebMedia)), None, None),
                 _ => (Status::Waiting, None, None),
             };
-            self.items.push(Item {
-                id: id as u64,
-                path,
-                status,
-                probe: Probe::Known(info),
-                size: Some(bytes),
-                out_size,
-                progress: Arc::default(),
-                staged,
-            });
+            let mut item = Item::new(id as u64, path);
+            item.status = status;
+            item.probe = Probe::Known(info);
+            item.size = Some(bytes);
+            item.out_size = out_size;
+            item.staged = staged;
+            self.items.push(item);
+        }
+        if scene == 9 {
+            let track = |index: usize, language: &str, name: Option<&str>| AudioTrack {
+                index,
+                language: Some(language.to_owned()),
+                name: name.map(str::to_owned),
+                codec: Some("AAC"),
+                channels: 2,
+                rate: 48_000,
+                decodable: true,
+            };
+            let first = &mut self.items[0];
+            first.edit = FileEdit {
+                expanded: true,
+                start: "0:30".to_owned(),
+                end: "2:15".to_owned(),
+                ..FileEdit::default()
+            };
+            first.edit.set_louder(true, self.settings.louder);
+            first.tracks = Tracks::Known(vec![track(0, "en", None), track(1, "en", Some("Commentary"))]);
+            let second = &mut self.items[1];
+            second.edit.start = "1:10".to_owned();
+            second.edit.track = 1;
         }
         if matches!(scene, 1 | 7) {
             self.summary = Some(summarise(
@@ -620,6 +823,10 @@ impl App {
         }
         if frames == 0 {
             self.show_scene(scene);
+            // Each scene starts without the last one's keyboard focus.
+            if let Some(focused) = ctx.memory(|m| m.focused()) {
+                ctx.memory_mut(|m| m.surrender_focus(focused));
+            }
         }
         if scene == 8 {
             // As if Tab had reached the "Music" preset.
@@ -642,6 +849,41 @@ impl App {
                 item.probe = info.map_or(Probe::Unknown, Probe::Known);
                 item.size = size;
             }
+        }
+    }
+
+    fn collect_tracks(&mut self) {
+        while let Ok((id, tracks)) = self.track_results.try_recv() {
+            if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
+                item.tracks = tracks.map_or(Tracks::Unknown, Tracks::Known);
+            }
+        }
+    }
+
+    /// Asks for the track list of every expanded row that has none yet.
+    fn request_tracks(&mut self) {
+        if self.shots.is_some() {
+            return;
+        }
+        for item in &mut self.items {
+            if item.edit.expanded && item.tracks == Tracks::NotAsked {
+                item.tracks = Tracks::Loading;
+                let _ = self.track_requests.send((item.id, item.path.clone()));
+            }
+        }
+    }
+
+    /// Files forwarded by later launches (Explorer's verb on many files):
+    /// into the queue, or held until the run ends.
+    fn collect_forwarded(&mut self) {
+        if self.shots.is_some() {
+            return;
+        }
+        let incoming = crate::shell::take_forwarded();
+        let busy = self.busy();
+        let now = take_forwarded(&mut self.forwarded, incoming, busy);
+        if !now.is_empty() {
+            self.add_paths(&now);
         }
     }
 
@@ -710,17 +952,13 @@ impl App {
         let (format, kbps, mono) = (self.settings.format, self.settings.kbps, self.settings.mono);
         let mut total = 0;
         let mut any = false;
-        for item in self
-            .items
-            .iter()
-            .filter(|i| i.status == Status::Waiting)
-            .take(self.allowance())
-        {
+        for item in self.items.iter().filter(|i| i.ready()).take(self.allowance()) {
             match item.probe {
                 Probe::Pending => return None,
                 Probe::Unknown => {}
-                Probe::Known(info) => {
-                    total += crate::convert::estimate_bytes(format, kbps, mono, &info)?;
+                Probe::Known(_) => {
+                    // Only the kept part of a trimmed file.
+                    total += item.estimate(format, kbps, mono)?;
                     any = true;
                 }
             }
@@ -968,7 +1206,10 @@ impl App {
             p.text,
             max_text,
         );
-        let formats = fill(t.formats_and_more, &[("list", &FORMATS.join(", "))]);
+        let formats = fill(
+            t.formats_and_more,
+            &[("list", &crate::convert::featured_formats().join(", "))],
+        );
         let formats_galley = painter.layout(
             formats,
             theme::small(),
@@ -1018,7 +1259,6 @@ impl App {
             self.drop_zone(ui, p, hovering);
             return;
         }
-        let t = self.t;
         let idle = !self.busy();
         let time = ui.ctx().input(|i| i.time);
         let mut actions: Vec<(u64, RowAction)> = Vec::new();
@@ -1028,21 +1268,42 @@ impl App {
             .map(|i| action_count(&i.status, idle))
             .max()
             .unwrap_or(0);
-        let actions_width = slots as f32 * ACTION_SLOT;
+        let look = self.look(p, self.t, time, slots as f32 * ACTION_SLOT);
+        let scroll_to = self.reveal_row.take();
         let mut frame = theme::card(p).inner_margin(egui::Margin::symmetric(0, 4));
         if hovering {
             frame = frame.stroke(Stroke::new(2.0, p.accent));
         }
         frame.show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            // Rows differ in height (an expanded one shows its controls), so
+            // only the rows in view are laid out, each at its own offset.
+            let heights: Vec<f32> = self.items.iter().map(Item::height).collect();
+            let offsets: Vec<f32> = heights
+                .iter()
+                .scan(0.0, |y, h| {
+                    let top = *y;
+                    *y += h;
+                    Some(top)
+                })
+                .collect();
             let count = self.items.len();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
-                .show_rows(ui, ROW_HEIGHT, count, |ui, range| {
-                    for index in range {
-                        let item = &self.items[index];
+                .show_viewport(ui, |ui, viewport| {
+                    ui.set_height(heights.iter().sum::<f32>());
+                    let top = ui.max_rect().top();
+                    let x = ui.max_rect().x_range();
+                    for index in visible_rows(&heights, viewport.min.y, viewport.max.y) {
+                        let y = top + offsets[index];
+                        let rect = Rect::from_x_y_ranges(x, y..=y + heights[index]);
+                        let item = &mut self.items[index];
+                        if scroll_to == Some(item.id) {
+                            ui.scroll_to_rect(rect, None);
+                        }
                         let last = index + 1 == count;
-                        if let Some(action) = row(ui, item, p, t, idle, last, time, actions_width) {
+                        let builder = egui::UiBuilder::new().max_rect(rect).id_salt(("row", item.id));
+                        if let Some(action) = ui.scope_builder(builder, |ui| row(ui, item, &look, last)).inner {
                             actions.push((item.id, action));
                         }
                     }
@@ -1067,8 +1328,21 @@ impl App {
                         reveal(path);
                     }
                 }
+                RowAction::Toggle => {
+                    if self.items[position].edit.expanded {
+                        self.reveal_row = Some(id);
+                    }
+                }
+                RowAction::TrackChanged => {
+                    // Tracks of one file can differ in length, rate and
+                    // channels: read the chosen one, for its size estimate.
+                    let item = &mut self.items[position];
+                    item.probe = Probe::Pending;
+                    let _ = self.probe_requests.send((id, item.path.clone(), item.edit.track));
+                }
             }
         }
+        self.request_tracks();
     }
 
     fn codec_help(&mut self, ui: &mut egui::Ui, p: Palette) {
@@ -1119,7 +1393,7 @@ impl App {
     }
 
     fn options_card(&mut self, ui: &mut egui::Ui, p: Palette) {
-        let before = (self.settings.format, self.settings.kbps, self.settings.mono);
+        let before = Choice::of(&self.settings);
         let t = self.t;
         let idle = !self.busy();
         let estimate = self.estimate();
@@ -1130,17 +1404,14 @@ impl App {
             ui.add_enabled_ui(idle, |ui| {
                 option_row(ui, label_w, t.use_for, 30.0, p, |ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let current = preset_of(self.settings.format, self.settings.kbps, self.settings.mono);
+                    let current = preset_of(Choice::of(&self.settings));
                     for preset in Preset::ALL {
                         let id = egui::Id::new(("preset", preset as u8));
                         if theme::chip(ui, id, preset.label(t), current == Some(preset))
                             .on_hover_text(preset.describe(t))
                             .clicked()
                         {
-                            let (format, kbps, mono) = preset.settings();
-                            self.settings.format = format;
-                            self.settings.kbps = kbps;
-                            self.settings.mono = mono;
+                            preset.settings().apply(&mut self.settings);
                         }
                     }
                 });
@@ -1195,6 +1466,15 @@ impl App {
                     {
                         self.settings.mono = mono;
                     }
+                    ui.add_space(8.0);
+                    // For every file without a choice of its own.
+                    let mut louder = self.settings.louder;
+                    if theme::checkbox(ui, &mut louder, t.louder, theme::body())
+                        .on_hover_text(t.louder_hint)
+                        .changed()
+                    {
+                        self.settings.louder = louder;
+                    }
                     if let (Some(bytes), true) = (estimate, idle) {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let text = fill(t.estimate, &[("size", &format_size(bytes))]);
@@ -1239,8 +1519,7 @@ impl App {
                 });
             });
         });
-        let after = (self.settings.format, self.settings.kbps, self.settings.mono);
-        if before != after {
+        if before != Choice::of(&self.settings) {
             self.save();
         }
     }
@@ -1474,24 +1753,17 @@ fn option_row(
     });
 }
 
-/// One file in the list: its badge, name, details, status and actions.
-#[allow(clippy::too_many_arguments)]
-fn row(
-    ui: &mut egui::Ui,
-    item: &Item,
-    p: Palette,
-    t: &Strings,
-    idle: bool,
-    last: bool,
-    time: f64,
-    actions_width: f32,
-) -> Option<RowAction> {
+/// One file in the list: its badge, name, details, status and actions, and
+/// when expanded its own trim, audio track and volume underneath.
+fn row(ui: &mut egui::Ui, item: &mut Item, look: &RowLook, last: bool) -> Option<RowAction> {
+    let (p, t, idle) = (look.p, look.t, look.idle);
     let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, item.height()), Sense::hover());
+    let head = Rect::from_min_size(rect.min, vec2(width, ROW_HEIGHT));
     let id = egui::Id::new(("row", item.id));
     let painter = ui.painter().clone();
-    if ui.rect_contains_pointer(rect) {
-        painter.rect_filled(rect.shrink2(vec2(4.0, 2.0)), theme::CONTROL_RADIUS, p.hover);
+    if ui.rect_contains_pointer(head) {
+        painter.rect_filled(head.shrink2(vec2(4.0, 2.0)), theme::CONTROL_RADIUS, p.hover);
     }
     if !last {
         painter.hline(
@@ -1500,8 +1772,8 @@ fn row(
             Stroke::new(1.0, p.border),
         );
     }
-    let inner = rect.shrink2(vec2(16.0, 0.0));
-    let cy = rect.center().y;
+    let inner = head.shrink2(vec2(16.0, 0.0));
+    let cy = head.center().y;
 
     let extension = item
         .path
@@ -1511,7 +1783,7 @@ fn row(
     let badge = Rect::from_min_size(pos2(inner.left(), cy - 18.0), vec2(36.0, 36.0));
     theme::file_badge(&painter, badge, crate::convert::is_video(&item.path), &extension, p);
 
-    // Icon buttons from the right edge in.
+    // Icon buttons from the right edge in; the expander is the left-most.
     let mut action = None;
     let mut slot = inner.right();
     let mut button = |ui: &mut egui::Ui, icon: Icon, tip: &str, what: RowAction| {
@@ -1535,6 +1807,15 @@ fn row(
         Status::Failed(_) if idle => button(ui, Icon::Retry, t.try_again, RowAction::Retry),
         _ => {}
     }
+    let chevron = if item.edit.expanded {
+        Icon::ChevronDown
+    } else {
+        Icon::ChevronRight
+    };
+    button(ui, chevron, t.file_options, RowAction::Toggle);
+    if matches!(action, Some(RowAction::Toggle)) {
+        item.edit.expanded = !item.edit.expanded;
+    }
 
     // The status badge, lined up across rows.
     let (started, fraction) = item.progress();
@@ -1550,7 +1831,7 @@ fn row(
         Status::Failed(_) => (t.failed.to_owned(), StatusKind::Failed),
     };
     // Room for the most buttons any row has, so the badges line up.
-    let badge_right = pos2(inner.right() - actions_width - 4.0, cy);
+    let badge_right = pos2(inner.right() - look.actions_width - 4.0, cy);
     let status = theme::status_badge(&painter, badge_right, &badge_text, kind, p, 150.0);
 
     // Name and details.
@@ -1574,7 +1855,22 @@ fn row(
         }
         _ => (meta_line(item.probe, item.size, item.out_size), p.muted, None),
     };
-    let meta_galley = theme::truncated(&painter, &meta, theme::small(), meta_colour, text_w);
+    // A collapsed row notes its own choices, or why they cannot be used.
+    let note = match (&item.status, item.edit.expanded, item.problem()) {
+        (Status::Failed(_), _, _) | (_, true, _) => None,
+        (Status::Waiting, false, Some(problem)) => {
+            Some((crate::edits::problem_text(problem, t).to_owned(), p.error))
+        }
+        _ => crate::edits::indicator(&item.edit, look.louder, t).map(|text| (text, p.accent_text)),
+    };
+    let mut parts: Vec<(&str, egui::Color32)> = vec![(&meta, meta_colour)];
+    if let Some((text, colour)) = &note {
+        if !meta.is_empty() {
+            parts.push((" · ", p.muted));
+        }
+        parts.push((text, *colour));
+    }
+    let meta_galley = theme::truncated_parts(&painter, &parts, theme::small(), text_w);
     let converting = item.status == Status::Converting && started;
     let gap = if converting { 1.0 } else { 2.0 };
     let block_h = name_galley.size().y + gap + meta_galley.size().y + if converting { 8.0 } else { 0.0 };
@@ -1599,15 +1895,144 @@ fn row(
 
     if converting {
         let bar = Rect::from_min_size(pos2(text_left, meta_bottom + 3.0), vec2(text_w, 4.0));
-        theme::progress_bar(&painter, bar, fraction, time, p);
+        theme::progress_bar(&painter, bar, fraction, look.time, p);
+    }
+
+    if item.edit.expanded {
+        // Under the name, from its left edge to the buttons' right edge.
+        let line = Rect::from_min_max(
+            pos2(text_left, head.bottom()),
+            pos2(inner.right(), head.bottom() + theme::CONTROL_HEIGHT),
+        );
+        if strip(ui, item, look, line, id) && action.is_none() {
+            action = Some(RowAction::TrackChanged);
+        }
     }
     action
+}
+
+/// The expanded row's controls, on two lines from `line` down: the trim
+/// times (and what is wrong with them), then the audio track, "Make louder"
+/// and the file's expected size. Returns whether the track changed.
+fn strip(ui: &mut egui::Ui, item: &mut Item, look: &RowLook, line: Rect, id: egui::Id) -> bool {
+    let (p, t) = (look.p, look.t);
+    let enabled = item.editable();
+    let builder = |rect: Rect| {
+        let b = egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center));
+        if enabled { b } else { b.disabled() }
+    };
+    let label = |ui: &mut egui::Ui, text: &str| {
+        let colour = if enabled { p.muted } else { p.disabled };
+        ui.add(egui::Label::new(RichText::new(text).color(colour)).selectable(false));
+    };
+
+    // Line one: Start and End, then the problem with them, if any.
+    ui.scope_builder(builder(line), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let before = (item.edit.start.clone(), item.edit.end.clone());
+        let problem = item.problem();
+        let bad_start = crate::edits::parse_time(&item.edit.start).is_err()
+            || problem == Some(Problem::Trim(crate::mf::TrimError::StartPastEnd));
+        let bad_end = crate::edits::parse_time(&item.edit.end).is_err()
+            || problem == Some(Problem::Trim(crate::mf::TrimError::EndBeforeStart));
+        label(ui, t.trim_start);
+        theme::text_field(ui, id.with("start"), &mut item.edit.start, "0:00", TIME_FIELD, bad_start);
+        ui.add_space(8.0);
+        label(ui, t.trim_end);
+        // The file's length: the end used when none is given.
+        let end_hint = item.seconds().map(crate::edits::format_time).unwrap_or_default();
+        theme::text_field(ui, id.with("end"), &mut item.edit.end, &end_hint, TIME_FIELD, bad_end);
+        if (&item.edit.start, &item.edit.end) != (&before.0, &before.1) {
+            // The outlines above were drawn for the old text.
+            ui.ctx().request_repaint();
+        }
+        if let Some(problem) = item.problem() {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.add_space(4.0);
+            let (r, _) = ui.allocate_exact_size(vec2(16.0, 18.0), Sense::hover());
+            theme::paint_icon(ui.painter(), r.center(), Icon::Alert, p.error);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(crate::edits::problem_text(problem, t))
+                        .font(theme::small())
+                        .color(p.error),
+                )
+                .truncate(),
+            );
+        }
+    });
+
+    // Line two: the audio track (only when there is a choice), Make louder,
+    // and the size.
+    let line = line.translate(vec2(0.0, theme::CONTROL_HEIGHT + STRIP_GAP));
+    let mut track_changed = false;
+    ui.scope_builder(builder(line), |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if let Tracks::Known(tracks) = &item.tracks
+            && tracks.len() > 1
+        {
+            let font = theme::body();
+            let labels: Vec<(String, bool)> = tracks
+                .iter()
+                .map(|track| {
+                    let drawable = |s: &str| ui.fonts_mut(|f| f.has_glyphs(&font, s));
+                    (crate::edits::track_label(track, t, drawable), track.decodable)
+                })
+                .collect();
+            let current = item.edit.track.min(labels.len() - 1);
+            let mut chosen = current;
+            let width = (ui.available_width() * 0.5).clamp(150.0, 300.0);
+            let fg = if enabled { p.text } else { p.disabled };
+            let combo = egui::ComboBox::from_id_salt(id.with("track"))
+                .selected_text(RichText::new(&labels[current].0).color(fg))
+                .width(width)
+                .icon(|ui, rect, _, _| {
+                    let p = theme::palette(ui.ctx());
+                    let colour = if ui.is_enabled() { p.muted } else { p.disabled };
+                    theme::paint_icon(ui.painter(), rect.center(), Icon::ChevronDown, colour);
+                })
+                .show_ui(ui, |ui| {
+                    for (i, (text, decodable)) in labels.iter().enumerate() {
+                        let option = egui::Button::selectable(chosen == i, text.as_str());
+                        if ui.add_enabled(*decodable, option).clicked() {
+                            chosen = i;
+                        }
+                    }
+                });
+            theme::focus_ring(ui, &combo.response, theme::CONTROL_RADIUS);
+            if chosen != current {
+                item.edit.track = chosen;
+                track_changed = true;
+            }
+            ui.add_space(8.0);
+        }
+        let mut louder = item.edit.louder(look.louder);
+        if theme::checkbox(ui, &mut louder, t.louder, theme::body())
+            .on_hover_text(t.louder_hint)
+            .changed()
+        {
+            item.edit.set_louder(louder, look.louder);
+        }
+        // Only for a file the next run can take as it stands.
+        if item.ready()
+            && let Some(bytes) = item.estimate(look.format, look.kbps, look.mono)
+        {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let text = fill(t.estimate, &[("size", &format_size(bytes))]);
+                ui.add(egui::Label::new(RichText::new(text).color(p.muted)).truncate());
+            });
+        }
+    });
+    track_changed
 }
 
 /// How many icon buttons a row in this state shows; must match `row`.
 fn action_count(status: &Status, idle: bool) -> usize {
     let remove = usize::from(idle && *status != Status::Converting);
-    remove
+    // The expander is always there.
+    1 + remove
         + match status {
             Status::Done(_) => 2,
             Status::Failed(_) if idle => 1,
@@ -1716,14 +2141,15 @@ fn short_error(message: &str, fallback: &str) -> String {
     short
 }
 
-/// One background thread that reads each added file's length and size.
-fn spawn_prober(ctx: egui::Context) -> (Sender<(u64, PathBuf)>, Receiver<ProbeResult>) {
-    let (request_tx, request_rx) = channel::<(u64, PathBuf)>();
+/// One background thread that reads each added file's length and size (of
+/// its first audio track, or of the one chosen later).
+fn spawn_prober(ctx: egui::Context) -> (Sender<ProbeRequest>, Receiver<ProbeResult>) {
+    let (request_tx, request_rx) = channel::<ProbeRequest>();
     let (result_tx, result_rx) = channel();
     std::thread::spawn(move || {
-        while let Ok((id, path)) = request_rx.recv() {
+        while let Ok((id, path, track)) = request_rx.recv() {
             let size = std::fs::metadata(&path).ok().map(|m| m.len());
-            let info = std::panic::catch_unwind(|| crate::mf::probe(&path))
+            let info = std::panic::catch_unwind(|| crate::mf::probe_track(&path, track))
                 .ok()
                 .flatten();
             if result_tx.send((id, info, size)).is_err() {
@@ -1731,6 +2157,26 @@ fn spawn_prober(ctx: egui::Context) -> (Sender<(u64, PathBuf)>, Receiver<ProbeRe
             }
             // Batches the redraws when many files are probed in a row.
             ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    });
+    (request_tx, result_rx)
+}
+
+/// One background thread that lists a file's audio tracks when its row is
+/// first expanded, so opening a large file never stalls the window. Apart
+/// from the prober, so a folder still being probed does not hold it up.
+fn spawn_track_reader(ctx: egui::Context) -> (Sender<(u64, PathBuf)>, Receiver<TrackResult>) {
+    let (request_tx, request_rx) = channel::<(u64, PathBuf)>();
+    let (result_tx, result_rx) = channel();
+    std::thread::spawn(move || {
+        while let Ok((id, path)) = request_rx.recv() {
+            let tracks = std::panic::catch_unwind(|| crate::mf::audio_tracks(&path))
+                .ok()
+                .and_then(Result::ok);
+            if result_tx.send((id, tracks)).is_err() {
+                break;
+            }
+            ctx.request_repaint();
         }
     });
     (request_tx, result_rx)
@@ -1757,7 +2203,7 @@ fn spawn_workers(
                 let Some(job) = next else { break };
                 // A decoder panic must not leave the row stuck on "Converting".
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::convert::convert_file(&job.path, &options, &job.progress)
+                    crate::convert::convert_file_with(&job.path, &options, &job.edits, &job.progress)
                 }))
                 .unwrap_or_else(|_| Err(ConvertError::Other(PANIC_MESSAGE.to_owned())))
                 .map(|path| {
@@ -1804,6 +2250,8 @@ impl eframe::App for App {
         let ctx = ui_root.ctx().clone();
         self.drive_shots(&ctx);
         self.collect_probes();
+        self.collect_tracks();
+        self.collect_forwarded();
         self.collect_results(&ctx);
         self.shortcuts(&ctx);
         if !self.busy() {
@@ -1925,13 +2373,109 @@ mod tests {
     fn rows_reserve_room_for_their_buttons() {
         let done = Status::Done(PathBuf::from("a.mp3"));
         let failed = Status::Failed(ConvertError::NoAudio);
-        assert_eq!(action_count(&Status::Waiting, true), 1);
-        assert_eq!(action_count(&Status::Waiting, false), 0);
-        assert_eq!(action_count(&Status::Converting, false), 0);
-        assert_eq!(action_count(&done, true), 3);
-        assert_eq!(action_count(&done, false), 2);
-        assert_eq!(action_count(&failed, true), 2);
-        assert_eq!(action_count(&failed, false), 0);
+        // Every row has its expander.
+        assert_eq!(action_count(&Status::Waiting, true), 2);
+        assert_eq!(action_count(&Status::Waiting, false), 1);
+        assert_eq!(action_count(&Status::Converting, false), 1);
+        assert_eq!(action_count(&done, true), 4);
+        assert_eq!(action_count(&done, false), 3);
+        assert_eq!(action_count(&failed, true), 3);
+        assert_eq!(action_count(&failed, false), 1);
+    }
+
+    #[test]
+    fn forwarded_files_wait_for_the_run_and_are_never_dropped() {
+        let a = PathBuf::from("C:/a.mp4");
+        let b = PathBuf::from("C:/b.mp3");
+        let mut pending = Vec::new();
+        assert!(take_forwarded(&mut pending, vec![a.clone()], true).is_empty());
+        assert!(take_forwarded(&mut pending, vec![b.clone()], true).is_empty());
+        assert!(take_forwarded(&mut pending, Vec::new(), true).is_empty());
+        assert_eq!(pending, vec![a.clone(), b.clone()]);
+        // Once the run is over, all of them, in the order they came.
+        assert_eq!(take_forwarded(&mut pending, Vec::new(), false), vec![a.clone(), b.clone()]);
+        assert!(pending.is_empty());
+        assert_eq!(take_forwarded(&mut pending, vec![a.clone()], false), vec![a]);
+        assert!(take_forwarded(&mut pending, Vec::new(), false).is_empty());
+    }
+
+    #[test]
+    fn only_rows_in_view_are_laid_out() {
+        let heights = [52.0, 136.0, 52.0, 52.0, 52.0];
+        // Offsets 0, 52, 188, 240, 292; 344 in all.
+        assert_eq!(visible_rows(&heights, 0.0, 100.0), 0..2);
+        assert_eq!(visible_rows(&heights, 0.0, 52.0), 0..1);
+        assert_eq!(visible_rows(&heights, 60.0, 200.0), 1..3);
+        assert_eq!(visible_rows(&heights, 188.0, 240.0), 2..3);
+        assert_eq!(visible_rows(&heights, 0.0, 1000.0), 0..5);
+        assert_eq!(visible_rows(&heights, 300.0, 400.0), 4..5);
+        assert_eq!(visible_rows(&heights, 400.0, 500.0), 5..5);
+        assert_eq!(visible_rows(&[], 0.0, 100.0), 0..0);
+    }
+
+    #[test]
+    fn a_rows_choices_shape_its_estimate_and_whether_it_converts() {
+        let mut item = Item::new(1, PathBuf::from("C:/Media/talk.mp4"));
+        item.probe = Probe::Known(Info { seconds: Some(300.0), rate: 48_000, channels: 2 });
+        // 192 kbps for 5 minutes, then for the 1:45 kept.
+        assert_eq!(item.estimate(Format::Mp3, 192, false), Some(7_200_000));
+        item.edit.start = "0:30".to_owned();
+        item.edit.end = "2:15".to_owned();
+        assert_eq!(item.estimate(Format::Mp3, 192, false), Some(2_520_000));
+        assert!(item.ready());
+        // A trim that does not fit the file holds the file back.
+        item.edit.start = "6:00".to_owned();
+        assert!(!item.ready());
+        assert_eq!(item.problem(), Some(Problem::Trim(crate::mf::TrimError::StartPastEnd)));
+        item.edit.start = "0:30".to_owned();
+        assert!(item.ready() && item.editable());
+        item.status = Status::Converting;
+        assert!(!item.ready() && !item.editable());
+        // An expanded row is taller by its controls.
+        assert_eq!(item.height(), ROW_HEIGHT);
+        item.edit.expanded = true;
+        assert_eq!(item.height(), ROW_HEIGHT + STRIP_HEIGHT);
+    }
+
+    /// The edits a row builds, through the real converter: a two-track file,
+    /// the second track, 0:01 to 0:03, made louder.
+    #[test]
+    fn a_rows_choices_convert_for_real() {
+        let dir = std::env::temp_dir().join(format!("mac-app-edits-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("two tracks.mp4");
+        // Track 2 is quiet, so Normalise has something to do.
+        crate::mf::tests::write_aac_tracks(&src, None, &[0.5, 0.05], 5).unwrap();
+        let mut item = Item::new(1, src.clone());
+        item.probe = Probe::Known(crate::mf::probe(&src).unwrap());
+        let tracks = crate::mf::audio_tracks(&src).unwrap();
+        assert_eq!(tracks.len(), 2);
+        item.edit = FileEdit {
+            start: "0:01".to_owned(),
+            end: "3".to_owned(),
+            track: 1,
+            ..FileEdit::default()
+        };
+        item.edit.set_louder(true, false);
+        let edits = item.edit.edits(item.seconds(), false).unwrap();
+        let options = Options { format: Format::Wav, kbps: 192, mono: false, out_dir: None };
+        let progress = Progress::default();
+        let out = crate::convert::convert_file_with(&src, &options, &edits, &progress).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        let rate = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as f64;
+        let data = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as f64;
+        let seconds = data / (rate * 4.0);
+        assert!((seconds - 2.0).abs() < 0.01, "{seconds}");
+        let peak = bytes[44..]
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
+            .max()
+            .unwrap();
+        // Brought from about -26 dBFS up to -1 dBFS.
+        assert!(peak > 28_000, "{peak}");
+        assert_eq!(progress.fraction(), Some(1.0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1944,20 +2488,32 @@ mod tests {
     #[test]
     fn presets_set_existing_options_and_are_recognised() {
         for preset in Preset::ALL {
-            let (format, kbps, mono) = preset.settings();
-            assert!(format.bitrates().contains(&kbps), "{preset:?}");
-            assert_eq!(preset_of(format, kbps, mono), Some(preset));
+            let c = preset.settings();
+            assert!(c.format.bitrates().contains(&c.kbps), "{preset:?}");
+            assert_eq!(preset_of(c), Some(preset));
         }
         assert_eq!(Format::Mp3.effective_kbps(192, true), 96);
         assert_eq!(Format::Mp3.effective_kbps(256, false), 256);
         assert_eq!(Format::M4a.effective_kbps(96, false), 96);
-        // Changing a detail leaves the preset.
-        assert_eq!(preset_of(Format::Mp3, 320, false), None);
-        assert_eq!(preset_of(Format::Mp3, 192, false), None);
-        assert_eq!(preset_of(Format::Wav, 192, false), None);
+        let choice = |format, kbps, mono, louder| Choice { format, kbps, mono, louder };
+        // Voice makes speech louder; the others leave the volume alone.
+        assert!(Preset::Voice.settings().louder);
+        assert!(!Preset::Music.settings().louder && !Preset::Smallest.settings().louder);
+        // Changing a detail leaves the preset, "Make louder" included.
+        assert_eq!(preset_of(choice(Format::Mp3, 320, false, false)), None);
+        assert_eq!(preset_of(choice(Format::Mp3, 192, false, false)), None);
+        assert_eq!(preset_of(choice(Format::Wav, 192, false, false)), None);
+        assert_eq!(preset_of(choice(Format::Mp3, 192, true, false)), None);
+        assert_eq!(preset_of(choice(Format::Mp3, 256, false, true)), None);
+        assert_eq!(preset_of(choice(Format::Mp3, 192, true, true)), Some(Preset::Voice));
         let t = Lang::En.strings();
-        assert_eq!(Preset::Voice.describe(t), "MP3 · 96 kbps · Mono (voice)");
+        assert_eq!(Preset::Voice.describe(t), "MP3 · 96 kbps · Mono (voice) · Make louder");
         assert_eq!(Preset::Smallest.describe(t), "M4A · 96 kbps");
+        // Applying a preset sets every option it names, and is then shown.
+        let mut settings = crate::settings::Settings::default();
+        Preset::Voice.settings().apply(&mut settings);
+        assert!(settings.louder && settings.mono);
+        assert_eq!(preset_of(Choice::of(&settings)), Some(Preset::Voice));
     }
 
     #[test]

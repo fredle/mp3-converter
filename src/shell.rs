@@ -320,14 +320,12 @@ pub fn start_listener() {
 }
 
 /// UI side: call once with the egui context so forwarded files wake the window.
-#[allow(dead_code)] // called from the UI (see the report)
 pub fn attach(ctx: &eframe::egui::Context) {
     let _ = CONTEXT.set(ctx.clone());
 }
 
 /// UI side: call every frame; returns files forwarded by other launches since
 /// the last call, to be added to the queue.
-#[allow(dead_code)] // called from the UI (see the report)
 pub fn take_forwarded() -> Vec<PathBuf> {
     INBOX_QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default()
 }

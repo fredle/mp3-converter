@@ -198,6 +198,9 @@ fn visuals(p: Palette, mut v: egui::Visuals) -> egui::Visuals {
     v.selection.bg_fill = p.accent_soft;
     v.selection.stroke = Stroke::new(1.0, p.text);
     v.text_cursor.stroke = Stroke::new(1.5, p.text);
+    // A steady caret: a blinking one redraws the window twice a second for
+    // as long as a field keeps focus, even when nothing else happens.
+    v.text_cursor.blink = false;
 
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.surface;
@@ -366,6 +369,22 @@ pub fn truncated(
     painter.layout_job(job)
 }
 
+/// Pieces of text in their own colours on one line, cut to `width` with an
+/// ellipsis.
+pub fn truncated_parts(
+    painter: &egui::Painter,
+    parts: &[(&str, Color32)],
+    font: FontId,
+    width: f32,
+) -> Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::default();
+    for (text, color) in parts {
+        job.append(text, 0.0, egui::TextFormat::simple(font.clone(), *color));
+    }
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
+    painter.layout_job(job)
+}
+
 /// Width `text` takes in `font`.
 pub fn text_width(ui: &egui::Ui, text: &str, font: FontId) -> f32 {
     ui.painter()
@@ -498,6 +517,7 @@ pub enum Icon {
     Warning,
     Arrow,
     ChevronDown,
+    ChevronRight,
 }
 
 pub fn paint_icon(painter: &egui::Painter, centre: Pos2, icon: Icon, color: Color32) {
@@ -598,6 +618,10 @@ pub fn paint_icon_sized(painter: &egui::Painter, centre: Pos2, icon: Icon, color
         }
         Icon::ChevronDown => {
             let points = vec![c + vec2(-4.0, -2.0), c + vec2(0.0, 2.0), c + vec2(4.0, -2.0)];
+            painter.add(Shape::line(points, stroke));
+        }
+        Icon::ChevronRight => {
+            let points = vec![c + vec2(-2.0, -4.0), c + vec2(2.0, 0.0), c + vec2(-2.0, 4.0)];
             painter.add(Shape::line(points, stroke));
         }
     }
@@ -852,6 +876,57 @@ pub fn segmented(ui: &mut egui::Ui, id: egui::Id, segments: &[Segment], selected
         focus_ring(ui, &response, CONTROL_RADIUS);
     }
     chosen
+}
+
+/// A Fluent text box, `width` wide and a control high: a control fill, a
+/// 1 px outline and a bottom edge that turns into a 2 px accent line while
+/// typing. `invalid` draws the outline and edge in the error colour (the
+/// message itself goes next to it, so it never rests on colour alone).
+pub fn text_field(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    width: f32,
+    invalid: bool,
+) -> Response {
+    let p = palette(ui.ctx());
+    let enabled = ui.is_enabled();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, CONTROL_HEIGHT), Sense::hover());
+    let focused = enabled && ui.memory(|m| m.has_focus(id));
+    let hovered = enabled && ui.rect_contains_pointer(rect);
+    let fill = if focused {
+        p.surface
+    } else if hovered {
+        p.control_hover
+    } else {
+        p.control
+    };
+    let outline = if invalid && enabled { p.error } else { p.control_border };
+    ui.painter()
+        .rect(rect, CONTROL_RADIUS, fill, Stroke::new(1.0, outline), StrokeKind::Inside);
+    let (edge_w, edge) = match (enabled, invalid, focused) {
+        (false, _, _) => (1.0, p.control_border),
+        (true, true, _) => (2.0, p.error),
+        (true, false, true) => (2.0, p.accent),
+        (true, false, false) => (1.0, p.strong_border),
+    };
+    // The edge follows the rounded corners: the box's own shape, clipped
+    // to its bottom pixels.
+    let bottom = Rect::from_min_max(pos2(rect.left(), rect.bottom() - edge_w), rect.max);
+    ui.painter().with_clip_rect(bottom).rect_filled(rect, CONTROL_RADIUS, edge);
+    let edit = egui::TextEdit::singleline(text)
+        .id(id)
+        .hint_text(egui::RichText::new(hint).color(if enabled { p.muted } else { p.disabled }))
+        .font(body())
+        .text_color(if enabled { p.text } else { p.disabled })
+        // A frame of our own replaces the margin; this one only pads.
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(9, 0)))
+        .vertical_align(egui::Align::Center)
+        .char_limit(16)
+        .min_size(vec2(width, CONTROL_HEIGHT))
+        .desired_width(width - 16.0);
+    ui.put(rect, edit)
 }
 
 /// A Fluent checkbox: a 18 px box with a strong outline, accent-filled with

@@ -237,6 +237,28 @@ pub struct Strings {
     /// `{v}`, the version number
     pub version: &'static str,
     pub rate: &'static str,
+    pub louder: &'static str,
+    pub louder_hint: &'static str,
+    pub file_options: &'static str,
+    pub trim_start: &'static str,
+    pub trim_end: &'static str,
+    pub trim_bad_time: &'static str,
+    pub trim_end_before_start: &'static str,
+    pub trim_start_past_end: &'static str,
+    /// `{start}`, `{end}`: times such as "0:30" and "2:15"
+    pub trim_range: &'static str,
+    /// `{start}`
+    pub trim_from: &'static str,
+    /// `{end}`
+    pub trim_until: &'static str,
+    /// `{n}`, counting from 1
+    pub track_n: &'static str,
+    /// After a track's description, when Windows cannot decode it.
+    pub track_unsupported: &'static str,
+    /// A row's note that the file is made louder.
+    pub louder_short: &'static str,
+    /// A row's note that the file keeps its volume although "Make louder" is on for the rest.
+    pub volume_original: &'static str,
 }
 
 impl Strings {
@@ -313,6 +335,21 @@ impl Strings {
             self.settings,
             self.version,
             self.rate,
+            self.louder,
+            self.louder_hint,
+            self.file_options,
+            self.trim_start,
+            self.trim_end,
+            self.trim_bad_time,
+            self.trim_end_before_start,
+            self.trim_start_past_end,
+            self.trim_range,
+            self.trim_from,
+            self.trim_until,
+            self.track_n,
+            self.track_unsupported,
+            self.louder_short,
+            self.volume_original,
         ]
     }
 }
@@ -387,6 +424,21 @@ static EN: Strings = Strings {
     settings: "Settings",
     version: "Version {v}",
     rate: "Rate this app",
+    louder: "Make louder",
+    louder_hint: "Brings quiet recordings up to full volume, without distortion.",
+    file_options: "Trim, audio track and volume",
+    trim_start: "Start",
+    trim_end: "End",
+    trim_bad_time: "Use a time such as 1:30",
+    trim_end_before_start: "The end must be after the start",
+    trim_start_past_end: "The start is past the end of the file",
+    trim_range: "{start} to {end}",
+    trim_from: "From {start}",
+    trim_until: "Until {end}",
+    track_n: "Track {n}",
+    track_unsupported: "can't be converted",
+    louder_short: "Louder",
+    volume_original: "Original volume",
 };
 
 static DE: Strings = Strings {
@@ -459,6 +511,21 @@ static DE: Strings = Strings {
     settings: "Einstellungen",
     version: "Version {v}",
     rate: "App bewerten",
+    louder: "Lauter machen",
+    louder_hint: "Hebt leise Aufnahmen auf volle Lautstärke an, ohne Verzerrung.",
+    file_options: "Zuschneiden, Tonspur und Lautstärke",
+    trim_start: "Start",
+    trim_end: "Ende",
+    trim_bad_time: "Zeit wie 1:30 eingeben",
+    trim_end_before_start: "Das Ende muss nach dem Start liegen",
+    trim_start_past_end: "Der Start liegt nach dem Ende der Datei",
+    trim_range: "{start} bis {end}",
+    trim_from: "Ab {start}",
+    trim_until: "Bis {end}",
+    track_n: "Spur {n}",
+    track_unsupported: "nicht konvertierbar",
+    louder_short: "Lauter",
+    volume_original: "Originallautstärke",
 };
 
 static FR: Strings = Strings {
@@ -531,6 +598,21 @@ static FR: Strings = Strings {
     settings: "Paramètres",
     version: "Version {v}",
     rate: "Noter l'application",
+    louder: "Rendre plus fort",
+    louder_hint: "Monte les enregistrements faibles au volume maximal, sans distorsion.",
+    file_options: "Découpe, piste audio et volume",
+    trim_start: "Début",
+    trim_end: "Fin",
+    trim_bad_time: "Saisissez une durée comme 1:30",
+    trim_end_before_start: "La fin doit être après le début",
+    trim_start_past_end: "Le début est après la fin du fichier",
+    trim_range: "{start} à {end}",
+    trim_from: "À partir de {start}",
+    trim_until: "Jusqu'à {end}",
+    track_n: "Piste {n}",
+    track_unsupported: "impossible à convertir",
+    louder_short: "Plus fort",
+    volume_original: "Volume d'origine",
 };
 
 static ES: Strings = Strings {
@@ -603,6 +685,21 @@ static ES: Strings = Strings {
     settings: "Configuración",
     version: "Versión {v}",
     rate: "Valorar la aplicación",
+    louder: "Subir el volumen",
+    louder_hint: "Lleva las grabaciones con poco volumen al máximo, sin distorsión.",
+    file_options: "Recorte, pista de audio y volumen",
+    trim_start: "Inicio",
+    trim_end: "Fin",
+    trim_bad_time: "Escribe un tiempo como 1:30",
+    trim_end_before_start: "El fin debe ser posterior al inicio",
+    trim_start_past_end: "El inicio está después del final del archivo",
+    trim_range: "{start} a {end}",
+    trim_from: "Desde {start}",
+    trim_until: "Hasta {end}",
+    track_n: "Pista {n}",
+    track_unsupported: "no se puede convertir",
+    louder_short: "Más volumen",
+    volume_original: "Volumen original",
 };
 
 static IT: Strings = Strings {
@@ -675,6 +772,21 @@ static IT: Strings = Strings {
     settings: "Impostazioni",
     version: "Versione {v}",
     rate: "Valuta l'app",
+    louder: "Alza il volume",
+    louder_hint: "Porta le registrazioni a basso volume al massimo, senza distorsioni.",
+    file_options: "Taglio, traccia audio e volume",
+    trim_start: "Inizio",
+    trim_end: "Fine",
+    trim_bad_time: "Inserisci un tempo come 1:30",
+    trim_end_before_start: "La fine deve venire dopo l'inizio",
+    trim_start_past_end: "L'inizio è oltre la fine del file",
+    trim_range: "Da {start} a {end}",
+    trim_from: "Da {start}",
+    trim_until: "Fino a {end}",
+    track_n: "Traccia {n}",
+    track_unsupported: "non convertibile",
+    louder_short: "Più forte",
+    volume_original: "Volume originale",
 };
 
 static PT: Strings = Strings {
@@ -747,6 +859,21 @@ static PT: Strings = Strings {
     settings: "Configurações",
     version: "Versão {v}",
     rate: "Avaliar o aplicativo",
+    louder: "Aumentar o volume",
+    louder_hint: "Leva gravações baixas ao volume máximo, sem distorção.",
+    file_options: "Corte, faixa de áudio e volume",
+    trim_start: "Início",
+    trim_end: "Fim",
+    trim_bad_time: "Use um tempo como 1:30",
+    trim_end_before_start: "O fim deve vir depois do início",
+    trim_start_past_end: "O início está depois do fim do arquivo",
+    trim_range: "{start} a {end}",
+    trim_from: "A partir de {start}",
+    trim_until: "Até {end}",
+    track_n: "Faixa {n}",
+    track_unsupported: "não pode ser convertida",
+    louder_short: "Mais alto",
+    volume_original: "Volume original",
 };
 
 static NL: Strings = Strings {
@@ -819,6 +946,21 @@ static NL: Strings = Strings {
     settings: "Instellingen",
     version: "Versie {v}",
     rate: "App beoordelen",
+    louder: "Luider maken",
+    louder_hint: "Brengt zachte opnamen naar vol volume, zonder vervorming.",
+    file_options: "Inkorten, audiospoor en volume",
+    trim_start: "Begin",
+    trim_end: "Einde",
+    trim_bad_time: "Gebruik een tijd zoals 1:30",
+    trim_end_before_start: "Het einde moet na het begin liggen",
+    trim_start_past_end: "Het begin ligt na het einde van het bestand",
+    trim_range: "{start} tot {end}",
+    trim_from: "Vanaf {start}",
+    trim_until: "Tot {end}",
+    track_n: "Spoor {n}",
+    track_unsupported: "kan niet worden geconverteerd",
+    louder_short: "Luider",
+    volume_original: "Oorspronkelijk volume",
 };
 
 static PL: Strings = Strings {
@@ -891,6 +1033,21 @@ static PL: Strings = Strings {
     settings: "Ustawienia",
     version: "Wersja {v}",
     rate: "Oceń aplikację",
+    louder: "Pogłośnij",
+    louder_hint: "Podnosi ciche nagrania do pełnej głośności, bez zniekształceń.",
+    file_options: "Przycinanie, ścieżka dźwiękowa i głośność",
+    trim_start: "Początek",
+    trim_end: "Koniec",
+    trim_bad_time: "Wpisz czas, np. 1:30",
+    trim_end_before_start: "Koniec musi być po początku",
+    trim_start_past_end: "Początek jest za końcem pliku",
+    trim_range: "Od {start} do {end}",
+    trim_from: "Od {start}",
+    trim_until: "Do {end}",
+    track_n: "Ścieżka {n}",
+    track_unsupported: "nie da się przekonwertować",
+    louder_short: "Głośniej",
+    volume_original: "Oryginalna głośność",
 };
 
 static TR: Strings = Strings {
@@ -963,6 +1120,21 @@ static TR: Strings = Strings {
     settings: "Ayarlar",
     version: "Sürüm {v}",
     rate: "Uygulamayı değerlendir",
+    louder: "Sesi yükselt",
+    louder_hint: "Kısık kayıtları bozulma olmadan tam ses düzeyine çıkarır.",
+    file_options: "Kırpma, ses parçası ve ses düzeyi",
+    trim_start: "Başlangıç",
+    trim_end: "Bitiş",
+    trim_bad_time: "1:30 gibi bir süre girin",
+    trim_end_before_start: "Bitiş, başlangıçtan sonra olmalı",
+    trim_start_past_end: "Başlangıç, dosyanın sonundan sonra",
+    trim_range: "{start} - {end}",
+    trim_from: "Başlangıç: {start}",
+    trim_until: "Bitiş: {end}",
+    track_n: "Parça {n}",
+    track_unsupported: "dönüştürülemez",
+    louder_short: "Ses yükseltildi",
+    volume_original: "Özgün ses düzeyi",
 };
 
 static RU: Strings = Strings {
@@ -1035,6 +1207,21 @@ static RU: Strings = Strings {
     settings: "Настройки",
     version: "Версия {v}",
     rate: "Оценить приложение",
+    louder: "Сделать громче",
+    louder_hint: "Поднимает тихие записи до полной громкости без искажений.",
+    file_options: "Обрезка, звуковая дорожка и громкость",
+    trim_start: "Начало",
+    trim_end: "Конец",
+    trim_bad_time: "Введите время, например 1:30",
+    trim_end_before_start: "Конец должен быть после начала",
+    trim_start_past_end: "Начало находится после конца файла",
+    trim_range: "С {start} до {end}",
+    trim_from: "С {start}",
+    trim_until: "До {end}",
+    track_n: "Дорожка {n}",
+    track_unsupported: "нельзя конвертировать",
+    louder_short: "Громче",
+    volume_original: "Исходная громкость",
 };
 
 static JA: Strings = Strings {
@@ -1107,6 +1294,21 @@ static JA: Strings = Strings {
     settings: "設定",
     version: "バージョン {v}",
     rate: "このアプリを評価",
+    louder: "音量を上げる",
+    louder_hint: "小さな録音を、音割れさせずに最大の音量まで上げます。",
+    file_options: "トリミング、音声トラック、音量",
+    trim_start: "開始",
+    trim_end: "終了",
+    trim_bad_time: "1:30 のように入力してください",
+    trim_end_before_start: "終了は開始より後にしてください",
+    trim_start_past_end: "開始がファイルの終わりを過ぎています",
+    trim_range: "{start}～{end}",
+    trim_from: "{start} から",
+    trim_until: "{end} まで",
+    track_n: "トラック {n}",
+    track_unsupported: "変換できません",
+    louder_short: "音量アップ",
+    volume_original: "元の音量",
 };
 
 static KO: Strings = Strings {
@@ -1179,6 +1381,21 @@ static KO: Strings = Strings {
     settings: "설정",
     version: "버전 {v}",
     rate: "앱 평가하기",
+    louder: "소리 키우기",
+    louder_hint: "작게 녹음된 소리를 왜곡 없이 최대 음량으로 키웁니다.",
+    file_options: "자르기, 오디오 트랙, 음량",
+    trim_start: "시작",
+    trim_end: "끝",
+    trim_bad_time: "1:30처럼 시간을 입력하세요",
+    trim_end_before_start: "끝은 시작보다 뒤여야 합니다",
+    trim_start_past_end: "시작이 파일 끝보다 뒤에 있습니다",
+    trim_range: "{start}~{end}",
+    trim_from: "{start}부터",
+    trim_until: "{end}까지",
+    track_n: "트랙 {n}",
+    track_unsupported: "변환할 수 없음",
+    louder_short: "소리 키움",
+    volume_original: "원래 음량",
 };
 
 static ZH_HANS: Strings = Strings {
@@ -1251,6 +1468,21 @@ static ZH_HANS: Strings = Strings {
     settings: "设置",
     version: "版本 {v}",
     rate: "为此应用评分",
+    louder: "提高音量",
+    louder_hint: "把声音小的录音提到最大音量，且不失真。",
+    file_options: "剪辑、音轨和音量",
+    trim_start: "开始",
+    trim_end: "结束",
+    trim_bad_time: "请输入时间，例如 1:30",
+    trim_end_before_start: "结束时间必须晚于开始时间",
+    trim_start_past_end: "开始时间超出了文件长度",
+    trim_range: "{start} 至 {end}",
+    trim_from: "从 {start} 开始",
+    trim_until: "到 {end} 为止",
+    track_n: "音轨 {n}",
+    track_unsupported: "无法转换",
+    louder_short: "已提高音量",
+    volume_original: "原始音量",
 };
 
 static ZH_HANT: Strings = Strings {
@@ -1323,6 +1555,21 @@ static ZH_HANT: Strings = Strings {
     settings: "設定",
     version: "版本 {v}",
     rate: "為此應用程式評分",
+    louder: "提高音量",
+    louder_hint: "把聲音小的錄音提到最大音量，且不失真。",
+    file_options: "剪輯、音軌和音量",
+    trim_start: "開始",
+    trim_end: "結束",
+    trim_bad_time: "請輸入時間，例如 1:30",
+    trim_end_before_start: "結束時間必須晚於開始時間",
+    trim_start_past_end: "開始時間超出了檔案長度",
+    trim_range: "{start} 至 {end}",
+    trim_from: "從 {start} 開始",
+    trim_until: "到 {end} 為止",
+    track_n: "音軌 {n}",
+    track_unsupported: "無法轉換",
+    louder_short: "已提高音量",
+    volume_original: "原始音量",
 };
 
 #[cfg(test)]

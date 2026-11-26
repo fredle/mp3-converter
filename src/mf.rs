@@ -479,8 +479,6 @@ pub struct Info {
     pub channels: u32,
 }
 
-// The window's API for trims and track choice; wired in by the UI.
-#[allow(dead_code)]
 impl Info {
     /// The same file as it will be after `trim`: only the length changes,
     /// so `estimate_bytes` on the result sizes the trimmed output. A trim
@@ -495,7 +493,9 @@ impl Info {
 }
 
 /// Opens `source` just far enough to learn its length and the shape of its
-/// first audio track. `None` when Windows cannot read its audio.
+/// first audio track. `None` when Windows cannot read its audio. (The
+/// window asks `probe_track` for the track a row has chosen.)
+#[cfg(test)]
 pub fn probe(source: &Path) -> Option<Info> {
     probe_track(source, 0)
 }
@@ -513,7 +513,6 @@ pub fn probe_track(source: &Path, track: usize) -> Option<Info> {
 }
 
 /// One audio track of a file, as `audio_tracks` lists it.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioTrack {
     /// Counting audio tracks only, from 0: the value for `Edits::track`.
@@ -568,7 +567,6 @@ fn codec_name(subtype: &GUID) -> Option<&'static str> {
 /// Lists the audio tracks of `source`, in the order `Edits::track` counts
 /// them. Most files have one; films and screen recordings can have several
 /// (languages, commentary, microphone and system sound).
-#[allow(dead_code)]
 pub fn audio_tracks(source: &Path) -> Result<Vec<AudioTrack>, MfError> {
     startup()?;
     let reader = create_reader(source)?;
