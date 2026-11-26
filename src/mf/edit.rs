@@ -191,6 +191,8 @@ pub struct Limiter {
     release: f32,
     window: VecDeque<f32>,
     sum: f64,
+    /// One frame scaled by `gain`, kept to avoid an allocation per frame.
+    scaled: Vec<f32>,
 }
 
 impl Limiter {
@@ -210,6 +212,7 @@ impl Limiter {
             release: 1.0 - (-1.0 / (0.2 * rate.max(1) as f32)).exp(),
             sum: (look + 1) as f64,
             window,
+            scaled: Vec::with_capacity(channels),
         }
     }
 
@@ -232,8 +235,11 @@ impl Limiter {
     }
 
     fn push(&mut self, frame: &[f32], out: &mut Vec<i16>) {
-        let scaled: Vec<f32> = frame.iter().map(|s| s * self.gain).collect();
+        let mut scaled = std::mem::take(&mut self.scaled);
+        scaled.clear();
+        scaled.extend(frame.iter().map(|s| s * self.gain));
         self.push_scaled(&scaled, out);
+        self.scaled = scaled;
     }
 
     fn push_scaled(&mut self, frame: &[f32], out: &mut Vec<i16>) {

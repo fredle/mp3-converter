@@ -951,6 +951,7 @@ fn transcode_inner(
         let mut limiter = edit::Limiter::new(gain, rate, channels);
         let mut block: Vec<i16> = Vec::new();
         let mut bytes: Vec<u8> = Vec::new();
+        let mut samples: Vec<f32> = Vec::new();
         let mut emit = |block: &mut Vec<i16>, out: &mut Output| {
             bytes.clear();
             bytes.extend(block.iter().flat_map(|s| s.to_le_bytes()));
@@ -958,7 +959,8 @@ fn transcode_inner(
             out.write(&bytes)
         };
         read_span(&src, rate, frame_bytes, frames, &pass, |pcm| {
-            let samples: Vec<f32> = floats(pcm).collect();
+            samples.clear();
+            samples.extend(floats(pcm));
             limiter.process(&samples, &mut block);
             emit(&mut block, &mut out)
         })?;
