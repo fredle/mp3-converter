@@ -263,15 +263,34 @@ pub fn apply(ctx: &egui::Context) {
     });
 }
 
-/// Segoe UI Variable's bytes, read once and kept for the process: the
-/// regular and semibold faces are two instances of the same file.
-fn variable_font(fonts_dir: &std::path::Path) -> Option<&'static [u8]> {
-    static BYTES: std::sync::OnceLock<Option<&'static [u8]>> = std::sync::OnceLock::new();
-    *BYTES.get_or_init(|| {
-        std::fs::read(fonts_dir.join("SegUIVar.ttf"))
-            .ok()
-            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
-    })
+/// A font file of Windows', mapped into memory read-only for the rest of
+/// the process, once per file. Mapped rather than read, the pages are
+/// Windows' shared copy of the file, loaded only where a glyph is used,
+/// instead of a private copy of the whole file (Microsoft YaHei alone is
+/// 19 MB). `None` when the file is missing or cannot be mapped.
+fn system_font(file: &str) -> Option<&'static [u8]> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Memory::{CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY};
+
+    static MAPPED: std::sync::Mutex<Vec<(String, Option<&'static [u8]>)>> = std::sync::Mutex::new(Vec::new());
+    let mut mapped = MAPPED.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, bytes)) = mapped.iter().find(|(name, _)| name == file) {
+        return *bytes;
+    }
+    let dir = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into())).join("Fonts");
+    let bytes = std::fs::File::open(dir.join(file)).ok().and_then(|f| {
+        let len = usize::try_from(f.metadata().ok()?.len()).ok().filter(|n| *n > 0)?;
+        unsafe {
+            let mapping = CreateFileMappingW(HANDLE(f.as_raw_handle()), None, PAGE_READONLY, 0, 0, None).ok()?;
+            let view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+            // The view keeps the file mapped after both handles are closed.
+            let _ = CloseHandle(mapping);
+            (!view.Value.is_null()).then(|| std::slice::from_raw_parts(view.Value as *const u8, len))
+        }
+    });
+    mapped.push((file.to_owned(), bytes));
+    bytes
 }
 
 /// Uses Windows 11's Segoe UI Variable for the interface (Segoe UI on
@@ -279,17 +298,15 @@ fn variable_font(fonts_dir: &std::path::Path) -> Option<&'static [u8]> {
 /// for the display language and Windows' language (so file names in the
 /// user's script show too). egui's built-in fonts stay as the fallback.
 pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
-    let fonts_dir = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
-        .join("Fonts");
     let mut fonts = egui::FontDefinitions::default();
     let add = |fonts: &mut egui::FontDefinitions, file: &str, shift: f32| -> bool {
         if fonts.font_data.contains_key(file) {
             return true;
         }
-        let Ok(bytes) = std::fs::read(fonts_dir.join(file)) else {
+        let Some(bytes) = system_font(file) else {
             return false;
         };
-        let data = egui::FontData::from_owned(bytes).tweak(egui::FontTweak {
+        let data = egui::FontData::from_static(bytes).tweak(egui::FontTweak {
             y_offset_factor: shift,
             ..Default::default()
         });
@@ -304,7 +321,7 @@ pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
         .unwrap_or_default();
     let mut regular = proportional.clone();
     let mut strong = proportional;
-    if let Some(bytes) = variable_font(&fonts_dir) {
+    if let Some(bytes) = system_font("SegUIVar.ttf") {
         for (name, weight, list) in [("segui-var-400", 400.0, &mut regular), ("segui-var-600", 600.0, &mut strong)] {
             let data = egui::FontData::from_static(bytes).tweak(egui::FontTweak {
                 coords: egui::epaint::text::VariationCoords::new([("wght", weight), ("opsz", 10.5)]),
