@@ -38,22 +38,27 @@ pub const VERB_TEXT: &str = "Convert with MP4 to MP3 && Audio Converter";
 const VERB_KEY: &str = "Mp3Converter.Convert";
 /// Where the registry writes go, relative to HKCU.
 const CLASSES: &str = r"Software\Classes";
-/// Types the app accepts that `convert.rs` may not list yet; merged with
-/// `convert::extensions()` and de-duplicated.
-const EXTRA_EXTENSIONS: [&str; 6] = ["amr", "mts", "m2ts", "mpg", "mpeg", "ts"];
-
 // ---------------------------------------------------------------- pure logic
 
-/// Every extension (no dot, lower case, sorted, unique) that gets integration.
-pub fn shell_extensions() -> Vec<String> {
-    let mut all: Vec<String> = crate::convert::extensions()
-        .into_iter()
-        .chain(EXTRA_EXTENSIONS)
-        .map(|e| e.to_ascii_lowercase())
-        .collect();
+/// Sorted, unique, lower-case extensions without dots.
+fn normalised(exts: Vec<&str>) -> Vec<String> {
+    let mut all: Vec<String> = exts.into_iter().map(|e| e.to_ascii_lowercase()).collect();
     all.sort();
     all.dedup();
     all
+}
+
+/// Every extension that gets integration: the types the app names
+/// (`convert::listed_extensions`), so Explorer never offers the verb on a
+/// type the app accepts only quietly.
+pub fn shell_extensions() -> Vec<String> {
+    normalised(crate::convert::listed_extensions())
+}
+
+/// Every extension registration may have written, in this version or an
+/// earlier one that also listed the quiet types: what unregistering cleans.
+fn removal_extensions() -> Vec<String> {
+    normalised(crate::convert::extensions())
 }
 
 /// `"C:\path\app.exe" "%1"`
@@ -194,7 +199,7 @@ pub fn register_under(base: &str, exe: &Path) -> Result<(), String> {
 }
 
 pub fn unregister_under(base: &str, exe: &Path) {
-    let exts = shell_extensions();
+    let exts = removal_extensions();
     for key in removal_keys(base, exe, &exts) {
         delete_tree(&key);
     }
@@ -338,10 +343,18 @@ mod tests {
     #[test]
     fn extensions_cover_new_types_once() {
         let e = shell_extensions();
-        for x in ["mp4", "mp3", "amr", "mts", "m2ts", "mpg", "mpeg", "ts"] {
+        for x in ["mp4", "mp3", "amr", "mpg", "mpeg", "ts"] {
             assert_eq!(e.iter().filter(|v| *v == x).count(), 1, "{x}");
         }
         assert!(e.iter().all(|x| !x.starts_with('.') && *x == x.to_ascii_lowercase()));
+        // Accepted quietly: never offered in Explorer, but cleaned up from
+        // an earlier registration that did offer them.
+        let removed = removal_extensions();
+        for x in ["mts", "m2ts"] {
+            assert!(!e.iter().any(|v| v == x), "{x}");
+            assert!(removed.iter().any(|v| v == x), "{x}");
+        }
+        assert!(e.iter().all(|x| removed.contains(x)));
     }
 
     #[test]

@@ -135,17 +135,64 @@ pub enum ConvertError {
     Other(String),
 }
 
-/// Video containers Windows opens without extra codecs (WebM aside). The
-/// MPEG program and transport streams (MPG, VOB, TS, MTS/M2TS from
-/// camcorders and Blu-ray, MOD/TOD from older camcorders) are read by
-/// Windows' own MPEG-2 source.
-const VIDEO: [&str; 21] = [
-    "mp4", "m4v", "mov", "3gp", "3g2", "3gpp", "3gp2", "avi", "wmv", "asf", "mkv", "webm", "mpg",
-    "mpeg", "vob", "mod", "ts", "mts", "m2ts", "m2t", "tod",
-];
-const AUDIO: [&str; 16] = [
-    "mp3", "mpa", "m4a", "m4b", "m4r", "aac", "adt", "adts", "wav", "flac", "wma", "amr", "mka",
-    "ogg", "oga", "opus",
+/// How the app treats one input extension.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// Accepted and named: in the file picker, Explorer's menu and lists.
+    Listed,
+    /// Listed, and one of the few names the empty window shows.
+    Featured,
+    /// Accepted when given (dropped, picked with "All files", found in a
+    /// folder) but never named or registered with Explorer, because the
+    /// sound in it usually cannot be decoded on Windows (camcorder MTS/M2TS
+    /// carries Dolby Digital or Blu-ray LPCM).
+    Quiet,
+}
+
+/// Every input type: (extension, is video, reach). The one list the file
+/// picker, drag and drop, folder scanning, the empty window's format line
+/// and Explorer's registration all come from. Video containers are ones
+/// Windows opens without extra codecs (WebM aside); the MPEG program and
+/// transport streams (MPG, VOB, TS, MOD/TOD from older camcorders) are read
+/// by Windows' own MPEG-2 source.
+const INPUTS: [(&str, bool, Reach); 37] = [
+    ("mp4", true, Reach::Featured),
+    ("m4v", true, Reach::Listed),
+    ("mov", true, Reach::Featured),
+    ("mkv", true, Reach::Featured),
+    ("3gp", true, Reach::Listed),
+    ("3g2", true, Reach::Listed),
+    ("3gpp", true, Reach::Listed),
+    ("3gp2", true, Reach::Listed),
+    ("avi", true, Reach::Featured),
+    ("wmv", true, Reach::Featured),
+    ("asf", true, Reach::Listed),
+    ("webm", true, Reach::Featured),
+    ("mpg", true, Reach::Listed),
+    ("mpeg", true, Reach::Listed),
+    ("vob", true, Reach::Listed),
+    ("mod", true, Reach::Listed),
+    ("ts", true, Reach::Listed),
+    ("mts", true, Reach::Quiet),
+    ("m2ts", true, Reach::Quiet),
+    ("m2t", true, Reach::Listed),
+    ("tod", true, Reach::Listed),
+    ("mp3", false, Reach::Featured),
+    ("mpa", false, Reach::Listed),
+    ("m4a", false, Reach::Featured),
+    ("m4b", false, Reach::Listed),
+    ("m4r", false, Reach::Listed),
+    ("aac", false, Reach::Listed),
+    ("adt", false, Reach::Listed),
+    ("adts", false, Reach::Listed),
+    ("wav", false, Reach::Featured),
+    ("flac", false, Reach::Featured),
+    ("wma", false, Reach::Listed),
+    ("amr", false, Reach::Listed),
+    ("mka", false, Reach::Listed),
+    ("ogg", false, Reach::Featured),
+    ("oga", false, Reach::Listed),
+    ("opus", false, Reach::Listed),
 ];
 
 fn extension_of(path: &Path) -> String {
@@ -155,9 +202,14 @@ fn extension_of(path: &Path) -> String {
         .to_ascii_lowercase()
 }
 
+fn input(path: &Path) -> Option<(&'static str, bool, Reach)> {
+    let ext = extension_of(path);
+    INPUTS.iter().copied().find(|(e, _, _)| *e == ext)
+}
+
 /// Whether the file is a video (as opposed to plain audio), by extension.
 pub fn is_video(path: &Path) -> bool {
-    VIDEO.contains(&extension_of(path).as_str())
+    input(path).is_some_and(|(_, video, _)| video)
 }
 
 /// Lengths as a media player shows them: "0:07", "3:42", "1:02:05".
@@ -218,14 +270,43 @@ pub fn estimate_bytes(format: Format, kbps: u32, mono: bool, info: &crate::mf::I
     }
 }
 
+/// Whether the app takes the file (dropped, picked or found in a folder).
 pub fn is_supported(path: &Path) -> bool {
-    let ext = extension_of(path);
-    VIDEO.contains(&ext.as_str()) || AUDIO.contains(&ext.as_str())
+    input(path).is_some()
 }
 
-/// Every extension the file picker should offer.
+/// Every extension the app takes, quiet ones included: what the file
+/// picker filters on and what Explorer registration cleans up.
 pub fn extensions() -> Vec<&'static str> {
-    VIDEO.iter().chain(AUDIO.iter()).copied().collect()
+    INPUTS.iter().map(|(ext, _, _)| *ext).collect()
+}
+
+/// The extensions the app names and registers with Explorer: everything
+/// but the quiet ones.
+pub fn listed_extensions() -> Vec<&'static str> {
+    INPUTS
+        .iter()
+        .filter(|(_, _, reach)| *reach != Reach::Quiet)
+        .map(|(ext, _, _)| *ext)
+        .collect()
+}
+
+/// A type's name as people write it: "MP4", "WebM", "Opus".
+pub fn format_name(ext: &str) -> String {
+    match ext {
+        "webm" => "WebM".to_owned(),
+        "opus" => "Opus".to_owned(),
+        _ => ext.to_ascii_uppercase(),
+    }
+}
+
+/// The few well-known types the empty window names, videos first.
+pub fn featured_formats() -> Vec<String> {
+    INPUTS
+        .iter()
+        .filter(|(_, _, reach)| *reach == Reach::Featured)
+        .map(|(ext, _, _)| format_name(ext))
+        .collect()
 }
 
 fn codec_for(ext: &str) -> Option<Codec> {
@@ -442,6 +523,29 @@ mod tests {
         }
         assert!(is_video(Path::new("clip.MTS")));
         assert!(!is_video(Path::new("memo.amr")));
+    }
+
+    #[test]
+    fn one_list_feeds_every_place_that_names_types() {
+        let all = extensions();
+        let listed = listed_extensions();
+        // Each extension once, lower case, without a dot.
+        let mut unique = all.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), all.len());
+        assert!(all.iter().all(|e| !e.starts_with('.') && *e == e.to_ascii_lowercase()));
+        // Everything listed is accepted; the quiet ones are accepted only.
+        assert!(listed.iter().all(|e| all.contains(e)));
+        for quiet in ["mts", "m2ts"] {
+            assert!(all.contains(&quiet) && !listed.contains(&quiet), "{quiet}");
+        }
+        assert!(listed.contains(&"mp4") && listed.contains(&"amr") && listed.contains(&"mpg"));
+        assert_eq!(
+            featured_formats().join(", "),
+            "MP4, MOV, MKV, AVI, WMV, WebM, MP3, M4A, WAV, FLAC, OGG"
+        );
+        assert_eq!(format_name("opus"), "Opus");
     }
 
     #[test]
