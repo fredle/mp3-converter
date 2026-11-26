@@ -293,12 +293,17 @@ fn system_font(file: &str) -> Option<&'static [u8]> {
     bytes
 }
 
+/// Windows' fonts for what the interface fonts lack, last in line:
+/// symbols, and emoji (drawn in one colour) in file and track names.
+const FALLBACK_FONTS: [&str; 2] = ["seguisym.ttf", "seguiemj.ttf"];
+
 /// Uses Windows 11's Segoe UI Variable for the interface (Segoe UI on
 /// Windows 10), so the app looks at home, and adds Windows' East Asian fonts
 /// for the display language and Windows' language (so file names in the
-/// user's script show too). egui's built-in fonts stay as the fallback.
+/// user's script show too), then Windows' symbol and emoji fonts. The app
+/// bundles no fonts: egui's built-in ones were a fifth of the download.
 pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
-    let mut fonts = egui::FontDefinitions::default();
+    let mut fonts = egui::FontDefinitions::empty();
     let add = |fonts: &mut egui::FontDefinitions, file: &str, shift: f32| -> bool {
         if fonts.font_data.contains_key(file) {
             return true;
@@ -314,13 +319,8 @@ pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
         true
     };
 
-    let proportional = fonts
-        .families
-        .get(&FontFamily::Proportional)
-        .cloned()
-        .unwrap_or_default();
-    let mut regular = proportional.clone();
-    let mut strong = proportional;
+    let mut regular: Vec<String> = Vec::new();
+    let mut strong: Vec<String> = Vec::new();
     if let Some(bytes) = system_font("SegUIVar.ttf") {
         for (name, weight, list) in [("segui-var-400", 400.0, &mut regular), ("segui-var-600", 600.0, &mut strong)] {
             let data = egui::FontData::from_static(bytes).tweak(egui::FontTweak {
@@ -328,12 +328,16 @@ pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
                 ..Default::default()
             });
             fonts.font_data.insert(name.to_owned(), Arc::new(data));
-            list.insert(0, name.to_owned());
+            list.push(name.to_owned());
         }
     } else {
-        if add(&mut fonts, "segoeui.ttf", 0.0) {
-            regular.insert(0, "segoeui.ttf".to_owned());
-            strong.insert(0, "segoeui.ttf".to_owned());
+        // Segoe UI is on every Windows since Vista; Arial only in case.
+        for file in ["segoeui.ttf", "arial.ttf"] {
+            if add(&mut fonts, file, 0.0) {
+                regular.push(file.to_owned());
+                strong.push(file.to_owned());
+                break;
+            }
         }
         if add(&mut fonts, "seguisb.ttf", 0.0) {
             strong.insert(0, "seguisb.ttf".to_owned());
@@ -352,13 +356,16 @@ pub fn install_fonts(ctx: &egui::Context, languages: &[Lang]) {
                     list.push((*file).to_owned());
                 }
             }
-            fonts
-                .families
-                .entry(FontFamily::Monospace)
-                .or_default()
-                .push((*file).to_owned());
         }
     }
+    for file in FALLBACK_FONTS {
+        if add(&mut fonts, file, 0.0) {
+            regular.push(file.to_owned());
+            strong.push(file.to_owned());
+        }
+    }
+    // Nothing in the window uses a monospace font, but egui needs one.
+    fonts.families.insert(FontFamily::Monospace, regular.clone());
     fonts.families.insert(FontFamily::Proportional, regular);
     fonts.families.insert(semibold(), strong);
     ctx.set_fonts(fonts);
