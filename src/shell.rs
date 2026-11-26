@@ -20,14 +20,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
+use windows::Win32::Storage::FileSystem::{
+    FILE_NOTIFY_CHANGE_FILE_NAME, FindCloseChangeNotification, FindFirstChangeNotificationW,
+    FindNextChangeNotification,
+};
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
     RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW, RegSetValueExW,
 };
 #[cfg(test)]
 use windows::Win32::System::Registry::{KEY_READ, RegOpenKeyExW};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
 use windows::Win32::UI::WindowsAndMessaging::{ASFW_ANY, AllowSetForegroundWindow};
 use windows::core::{HSTRING, PCWSTR, w};
 
@@ -294,15 +298,44 @@ fn drain_dir(dir: &Path, max_age: Duration) -> Vec<PathBuf> {
     out
 }
 
+/// Longest the listener sleeps without a word from Windows: a safety net
+/// should a change notification ever be missed. The window never redraws
+/// for it.
+const INBOX_SAFETY_WAKE_MS: u32 = 5_000;
+
+/// Watches `dir` for files appearing, being renamed or deleted in it. `None`
+/// when it cannot (the folder could not be made, say).
+fn watch(dir: &Path) -> Option<HANDLE> {
+    let _ = std::fs::create_dir_all(dir);
+    unsafe { FindFirstChangeNotificationW(&HSTRING::from(dir.as_os_str()), false, FILE_NOTIFY_CHANGE_FILE_NAME).ok() }
+}
+
 /// Primary instance only: watches the inbox for files forwarded by later
-/// launches. Cheap (a directory listing every 200 ms).
+/// launches. The thread sleeps until Windows reports a change in the inbox
+/// folder (a forwarded list is renamed into place), so an idle window costs
+/// nothing; it used to list the folder every 200 ms.
 pub fn start_listener() {
     let dir = inbox_dir();
     // Anything older than a minute is from a dead session.
     drain_dir(&dir, Duration::from_secs(60));
     std::thread::spawn(move || {
+        let mut handle = watch(&dir);
         loop {
-            std::thread::sleep(Duration::from_millis(200));
+            match handle {
+                Some(h) => unsafe {
+                    let _ = WaitForSingleObject(h, INBOX_SAFETY_WAKE_MS);
+                    // Re-arm before reading, so nothing that arrives while
+                    // the folder is read goes unnoticed.
+                    if FindNextChangeNotification(h).is_err() {
+                        let _ = FindCloseChangeNotification(h);
+                        handle = None;
+                    }
+                },
+                None => {
+                    std::thread::sleep(Duration::from_millis(INBOX_SAFETY_WAKE_MS as u64));
+                    handle = watch(&dir);
+                }
+            }
             let got = drain_dir(&dir, Duration::from_secs(3600));
             if got.is_empty() {
                 continue;
