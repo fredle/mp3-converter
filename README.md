@@ -86,8 +86,8 @@ Windows cannot decode at all is listed with Windows' own explanation.
 
 ## Languages
 
-The window follows Windows' display language, and the picker in the footer
-overrides it: English, German, French, Spanish, Italian, Portuguese, Dutch,
+The window follows Windows' display language, and the picker in Settings
+(the gear in the header) overrides it: English, German, French, Spanish, Italian, Portuguese, Dutch,
 Polish, Turkish, Russian, Japanese, Korean, and Simplified and Traditional
 Chinese. All text is in `src/i18n.rs`; a test checks that every language has
 every text with the same placeholders. Japanese, Korean and Chinese are drawn
@@ -117,8 +117,8 @@ It installs per user, needs no admin rights and updates itself.
 - Settings (output format, bitrate, mono, folder, licence key) are in
   `%LOCALAPPDATA%\Mp3Converter\settings.json`.
 - No telemetry and no accounts. The only network use is the update check
-  against GitHub Releases, about once a day, which can be turned off in the
-  footer. Buying an unlock opens your browser; the app itself sends nothing.
+  against GitHub Releases, about once a day, which can be turned off in
+  Settings. Buying an unlock opens your browser; the app itself sends nothing.
 
 ## The licence server
 
@@ -154,4 +154,8 @@ Store screenshots: `MAC_SHOTS=<folder>` makes the app draw three made-up
 scenes (ready, converted, empty), write each as a raw `<n>_<w>x<h>.rgba`
 frame into the folder and close, without converting anything or saving
 settings. `MAC_SHOTS_LANG=<locale>` picks the language and
-`MAC_SHOTS_VERSION` the version shown.
+`MAC_SHOTS_VERSION` the version shown. For design review,
+`MAC_SHOTS_ALL=1` adds six more scenes (files dragged over, more files than
+a free run takes, converting, Settings open, failures, keyboard focus),
+`MAC_SHOTS_MIN=1` uses the smallest window and `MAC_SHOTS_SCALE=1.5` draws at
+150% (on a display at 100%).
