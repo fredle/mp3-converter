@@ -5,8 +5,9 @@
 //! The server URL is baked in at scaffold time from app-factory's
 //! `config.json` `feedbackUrl`. When that was empty the link is not shown.
 //!
-//! It needs only `theme::palette`, `theme::card` and `theme::semibold` from
-//! the app's theme, so it also fits apps whose theme predates the template.
+//! It is drawn with the app's theme: `theme::card` for the box,
+//! `theme::button` for its buttons and `theme::link` for the link, so it has
+//! the same corners, colours and button states as the rest of the window.
 //!
 //! Apps for children use `Feedback::grown_ups_only()`: the link then reads
 //! "For grown-ups" and the box opens behind a sum a child can't do (two
@@ -24,31 +25,28 @@ const APP: &str = "mp3-converter";
 const MAX_CHARS: usize = 2000;
 
 fn small() -> egui::FontId {
-    egui::FontId::new(12.5, egui::FontFamily::Proportional)
+    theme::small()
 }
 
 fn title() -> egui::FontId {
-    egui::FontId::new(20.0, theme::semibold())
+    egui::FontId::new(theme::SUBTITLE_SIZE, theme::semibold())
 }
 
-fn primary_button<'a>(p: theme::Palette, text: &str, enabled: bool, width: f32) -> egui::Button<'a> {
-    let label = egui::RichText::new(text)
-        .family(theme::semibold())
-        .size(15.0)
-        .color(if enabled { p.on_accent } else { p.muted });
-    egui::Button::new(label)
-        .fill(if enabled { p.accent } else { p.track })
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(10)
-        .min_size(egui::vec2(width, 40.0))
+/// The box's accent button, `width` wide (0 fits the text); greyed out and
+/// unclickable until it can do something.
+fn primary_button(ui: &mut egui::Ui, text: &str, enabled: bool, width: f32) -> egui::Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        theme::button(ui, theme::ButtonKind::Primary, text, width, theme::CONTROL_HEIGHT)
+    })
+    .inner
 }
 
-fn secondary_button<'a>(p: theme::Palette, text: &str) -> egui::Button<'a> {
-    egui::Button::new(egui::RichText::new(text).color(p.text))
-        .fill(p.control)
-        .stroke(egui::Stroke::new(1.0, p.border))
-        .corner_radius(8)
-        .min_size(egui::vec2(0.0, 32.0))
+/// The box's neutral button (Cancel).
+fn secondary_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
+    ui.add_enabled_ui(enabled, |ui| {
+        theme::button(ui, theme::ButtonKind::Standard, text, 0.0, theme::CONTROL_HEIGHT)
+    })
+    .inner
 }
 
 pub fn enabled() -> bool {
@@ -144,14 +142,7 @@ impl Feedback {
             return;
         }
         let label = if self.gated { "For grown-ups: what would make this better?" } else { self.texts.link };
-        let text = egui::RichText::new(label)
-            .font(small())
-            .color(ui.visuals().hyperlink_color);
-        if ui
-            .add(egui::Label::new(text).sense(egui::Sense::click()))
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .clicked()
-        {
+        if theme::link(ui, label, small()).clicked() {
             self.open();
         }
     }
@@ -194,7 +185,11 @@ impl Feedback {
         let mut send = false;
         let mut gate_try = false;
         let modal = egui::Modal::new(egui::Id::new("feedback"))
-            .frame(theme::card(p).inner_margin(egui::Margin::same(20)))
+            .frame(
+                theme::card(p)
+                    .inner_margin(egui::Margin::same(20))
+                    .shadow(ctx.global_style().visuals.window_shadow),
+            )
             .show(ctx, |ui| {
                 // Fits the window down to its minimum width.
                 ui.set_width((ui.ctx().content_rect().width() - 80.0).clamp(240.0, 380.0));
@@ -213,6 +208,7 @@ impl Feedback {
                         egui::TextEdit::singleline(answer)
                             .hint_text("Answer")
                             .char_limit(6)
+                            .margin(egui::vec2(8.0, 6.0))
                             .desired_width(120.0),
                     );
                     if answer.is_empty() && !field.has_focus() {
@@ -230,10 +226,10 @@ impl Feedback {
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         let ready = !answer.trim().is_empty();
-                        if ui.add(primary_button(p, "Continue", ready, 120.0)).clicked() || (enter && ready) {
+                        if primary_button(ui, "Continue", ready, 120.0).clicked() || (enter && ready) {
                             gate_try = true;
                         }
-                        if ui.add(secondary_button(p, "Cancel")).clicked() {
+                        if secondary_button(ui, "Cancel", true).clicked() {
                             close = true;
                         }
                     });
@@ -242,7 +238,7 @@ impl Feedback {
                 if let State::Sent = self.state {
                     ui.label(egui::RichText::new(t.thanks).color(p.muted));
                     ui.add_space(16.0);
-                    if ui.add(primary_button(p, t.close, true, ui.available_width())).clicked() {
+                    if primary_button(ui, t.close, true, ui.available_width()).clicked() {
                         close = true;
                     }
                     return;
@@ -257,6 +253,7 @@ impl Feedback {
                         .hint_text(t.hint)
                         .char_limit(MAX_CHARS)
                         .desired_rows(4)
+                        .margin(egui::vec2(8.0, 6.0))
                         .desired_width(f32::INFINITY),
                 );
                 if self.text.is_empty() && !sending && !note.has_focus() {
@@ -270,10 +267,10 @@ impl Feedback {
                 ui.horizontal(|ui| {
                     let ready = !sending && !self.text.trim().is_empty();
                     let label = if sending { t.sending } else { t.send };
-                    if ui.add(primary_button(p, label, ready, 120.0)).clicked() {
+                    if primary_button(ui, label, ready, 120.0).clicked() {
                         send = true;
                     }
-                    if ui.add_enabled(!sending, secondary_button(p, t.cancel)).clicked() {
+                    if secondary_button(ui, t.cancel, !sending).clicked() {
                         close = true;
                     }
                 });
