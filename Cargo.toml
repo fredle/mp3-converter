@@ -1,6 +1,6 @@
 [package]
 name = "mp3_converter"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "Convert video and audio files to MP3, M4A, WAV or FLAC, offline."
 repository = "https://github.com/fredle/mp3-converter"

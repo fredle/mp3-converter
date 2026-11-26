@@ -9,14 +9,31 @@ FLAC, and press Convert. Nothing is uploaded: files never leave the PC.
 ## What it does
 
 - Reads video (MP4, M4V, MOV, 3GP, 3G2, AVI, WMV, ASF, MKV, WebM, MPG/MPEG,
-  VOB, MOD, TS, MTS/M2TS, M2T, TOD) and audio (MP3, MPA, M4A, M4B, M4R, AAC,
-  ADT, WAV, FLAC, WMA, AMR, MKA, OGG, OGA, Opus). Drop files or whole
-  folders on the window, or use **Add files** / **Add folder**.
+  VOB, MOD, TS, M2T, TOD) and audio (MP3, MPA, M4A, M4B, M4R, AAC, ADT,
+  WAV, FLAC, WMA, AMR, MKA, OGG, OGA, Opus). Drop files or whole folders on
+  the window, or use **Add files** / **Add folder**. The types come from one
+  list in `convert.rs`, which the file picker, drag and drop, folder
+  scanning, the empty window and the Explorer registration all use.
+- In Explorer, right-click any of those files (or many at once) and choose
+  **Convert with MP4 to MP3 & Audio Converter**, or use **Open with**. It is
+  registered for the current user only and never changes the default app.
+  Many files end up in one window: each later launch hands its files to the
+  first window and exits (`shell.rs`); files that arrive during a run join
+  the queue when it ends.
+- Each row has a chevron that opens the file's own choices under its name:
+  **Start** and **End** (as `90`, `1:30` or `1:02:03`), the **audio track**
+  when the file has more than one, and **Make louder**. A closed row notes
+  them in its details (`0:30 to 2:15 · Track 2 · Louder`), and a time that
+  does not fit the file is explained in place; that file waits until it is
+  fixed. Track lists are read in the background the first time a row opens.
 - Writes MP3 (128, 192, 256 or 320 kbps), M4A (AAC at 96, 128, 160 or
   192 kbps), WAV or FLAC. The bitrates are shown as Smaller, Standard, High
   and Best with the kbps next to each, and the options show roughly how big
   the files about to be converted will be (bitrate times length for MP3 and
   M4A, the exact size for WAV; FLAC depends on the sound, so it shows none).
+- **Make louder** next to Mono applies to every file without a choice of
+  its own, and the **Voice** preset turns it on (with mono MP3 at the
+  Standard step). **Music** and **Smallest** are the other presets.
 - **Mono (voice)** writes one channel in any format, for lectures and voice
   notes. MP3 and M4A then use mono bitrates (MP3 64, 96, 112 or 128 kbps;
   M4A 48, 64, 96 or 128 kbps), because Windows' MP3 encoder stops at
@@ -114,7 +131,8 @@ It installs per user, needs no admin rights and updates itself.
 
 ## Data and privacy
 
-- Settings (output format, bitrate, mono, folder, licence key) are in
+- Settings (output format, bitrate, mono, Make louder, folder, licence key)
+  are in
   `%LOCALAPPDATA%\Mp3Converter\settings.json`.
 - No telemetry and no accounts. The only network use is the update check
   against GitHub Releases, about once a day, which can be turned off in
@@ -155,7 +173,8 @@ scenes (ready, converted, empty), write each as a raw `<n>_<w>x<h>.rgba`
 frame into the folder and close, without converting anything or saving
 settings. `MAC_SHOTS_LANG=<locale>` picks the language and
 `MAC_SHOTS_VERSION` the version shown. For design review,
-`MAC_SHOTS_ALL=1` adds six more scenes (files dragged over, more files than
-a free run takes, converting, Settings open, failures, keyboard focus),
+`MAC_SHOTS_ALL=1` adds seven more scenes (files dragged over, more files
+than a free run takes, converting, Settings open, failures, keyboard focus,
+a row opened with its own trim, two audio tracks and Make louder),
 `MAC_SHOTS_MIN=1` uses the smallest window and `MAC_SHOTS_SCALE=1.5` draws at
 150% (on a display at 100%).
