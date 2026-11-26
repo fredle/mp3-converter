@@ -332,7 +332,7 @@ fn visible_rows(heights: &[f32], top: f32, bottom: f32) -> std::ops::Range<usize
 /// The Store's "write a review" page for `store_id`, when it looks like a
 /// real Store ID.
 fn review_url(store_id: &str) -> Option<String> {
-    let valid = store_id.len() == 12 && store_id.chars().all(|c| c.is_ascii_alphanumeric());
+    let valid = matches!(store_id.len(), 12 | 14) && store_id.chars().all(|c| c.is_ascii_alphanumeric());
     valid.then(|| format!("ms-windows-store://review/?ProductId={store_id}"))
 }
 
@@ -2534,6 +2534,7 @@ mod tests {
         assert_eq!(review_url(""), None);
         assert_eq!(review_url("9NBLGGH4NNS"), None);
         assert_eq!(review_url("9N-LGGH4NNS1"), None);
+        assert!(review_url("XP99D661MJWKBX").is_some());
         assert_eq!(
             review_url("9NBLGGH4NNS1").as_deref(),
             Some("ms-windows-store://review/?ProductId=9NBLGGH4NNS1")
