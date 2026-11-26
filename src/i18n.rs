@@ -1,7 +1,7 @@
 //! The app's text in every supported language. The language follows Windows'
-//! display language unless the user picks one in the footer.
+//! display language unless the user picks one in Settings.
 //!
-//! Placeholders: `{n}`, `{a}`, `{b}` (numbers), `{email}`, `{name}`, `{size}`. Phrases
+//! Placeholders: `{n}` (numbers), `{email}`, `{name}`, `{size}`, `{list}`, `{v}`. Phrases
 //! with a count are worded so they read correctly for any number, because
 //! several of these languages have more than two plural forms.
 //!
@@ -168,7 +168,7 @@ pub struct Strings {
     pub same_folder: &'static str,
     /// `{n}`
     pub converting_left: &'static str,
-    /// `{a}` of `{b}`
+    /// `{n}`: the free run size, when more files than that wait
     pub convert_next: &'static str,
     pub convert: &'static str,
     pub convert_one: &'static str,
@@ -221,6 +221,22 @@ pub struct Strings {
     /// `{n}`
     pub n_failed: &'static str,
     pub clear_finished: &'static str,
+    /// The drop zone's secondary action.
+    pub or_choose: &'static str,
+    /// `{list}`, a list of file types such as "MP4, MOV, MP3"
+    pub formats_and_more: &'static str,
+    /// Label of the purpose presets row.
+    pub use_for: &'static str,
+    pub preset_voice: &'static str,
+    pub preset_music: &'static str,
+    pub preset_smallest: &'static str,
+    /// `{n}`; shown when more files wait than a free run converts.
+    pub limit_note: &'static str,
+    pub unlock_link: &'static str,
+    pub settings: &'static str,
+    /// `{v}`, the version number
+    pub version: &'static str,
+    pub rate: &'static str,
 }
 
 impl Strings {
@@ -286,6 +302,17 @@ impl Strings {
             self.failed,
             self.n_failed,
             self.clear_finished,
+            self.or_choose,
+            self.formats_and_more,
+            self.use_for,
+            self.preset_voice,
+            self.preset_music,
+            self.preset_smallest,
+            self.limit_note,
+            self.unlock_link,
+            self.settings,
+            self.version,
+            self.rate,
         ]
     }
 }
@@ -297,7 +324,7 @@ static EN: Strings = Strings {
     unlock: "Unlock",
     free_limit: "Free: {n} files per run",
     unlocked_for: "Unlocked for {email}",
-    drop_here: "Drop videos or audio files here",
+    drop_here: "Drop videos or audio here",
     remove_hint: "Remove from the list",
     install_then: "Install, then",
     try_again: "Try again",
@@ -305,7 +332,7 @@ static EN: Strings = Strings {
     save_to: "Save to",
     same_folder: "the same folder as the original",
     converting_left: "Converting… {n} left",
-    convert_next: "Convert next {a} of {b}",
+    convert_next: "Convert next {n}",
     convert: "Convert",
     convert_one: "Convert 1 file",
     convert_n: "Convert {n} files",
@@ -349,6 +376,17 @@ static EN: Strings = Strings {
     failed: "Failed",
     n_failed: "{n} failed",
     clear_finished: "Clear finished",
+    or_choose: "or choose files",
+    formats_and_more: "{list} and more",
+    use_for: "Use for",
+    preset_voice: "Voice",
+    preset_music: "Music",
+    preset_smallest: "Smallest",
+    limit_note: "The free version converts {n} files per click. The rest stay in the list for the next one.",
+    unlock_link: "Convert them all at once with the one-off unlock",
+    settings: "Settings",
+    version: "Version {v}",
+    rate: "Rate this app",
 };
 
 static DE: Strings = Strings {
@@ -366,7 +404,7 @@ static DE: Strings = Strings {
     save_to: "Speichern in",
     same_folder: "demselben Ordner wie das Original",
     converting_left: "Konvertiere… noch {n}",
-    convert_next: "Nächste {a} von {b} konvertieren",
+    convert_next: "Nächste {n} konvertieren",
     convert: "Konvertieren",
     convert_one: "1 Datei konvertieren",
     convert_n: "{n} Dateien konvertieren",
@@ -410,6 +448,17 @@ static DE: Strings = Strings {
     failed: "Fehler",
     n_failed: "Fehlgeschlagen: {n}",
     clear_finished: "Fertige entfernen",
+    or_choose: "oder Dateien auswählen",
+    formats_and_more: "{list} und mehr",
+    use_for: "Zweck",
+    preset_voice: "Sprache",
+    preset_music: "Musik",
+    preset_smallest: "Am kleinsten",
+    limit_note: "Die kostenlose Version konvertiert {n} Dateien pro Klick. Der Rest bleibt für den nächsten Klick in der Liste.",
+    unlock_link: "Mit der einmaligen Freischaltung alle auf einmal konvertieren",
+    settings: "Einstellungen",
+    version: "Version {v}",
+    rate: "App bewerten",
 };
 
 static FR: Strings = Strings {
@@ -427,7 +476,7 @@ static FR: Strings = Strings {
     save_to: "Enregistrer dans",
     same_folder: "le même dossier que l'original",
     converting_left: "Conversion… {n} restantes",
-    convert_next: "Convertir les {a} suivantes sur {b}",
+    convert_next: "Convertir les {n} suivants",
     convert: "Convertir",
     convert_one: "Convertir 1 fichier",
     convert_n: "Convertir {n} fichiers",
@@ -471,6 +520,17 @@ static FR: Strings = Strings {
     failed: "Échec",
     n_failed: "Échecs : {n}",
     clear_finished: "Retirer les terminés",
+    or_choose: "ou choisissez des fichiers",
+    formats_and_more: "{list} et plus encore",
+    use_for: "Usage",
+    preset_voice: "Voix",
+    preset_music: "Musique",
+    preset_smallest: "Le plus léger",
+    limit_note: "La version gratuite convertit {n} fichiers par clic. Les autres restent dans la liste pour le clic suivant.",
+    unlock_link: "Tout convertir d'un coup avec le déblocage unique",
+    settings: "Paramètres",
+    version: "Version {v}",
+    rate: "Noter l'application",
 };
 
 static ES: Strings = Strings {
@@ -488,7 +548,7 @@ static ES: Strings = Strings {
     save_to: "Guardar en",
     same_folder: "la misma carpeta que el original",
     converting_left: "Convirtiendo… quedan {n}",
-    convert_next: "Convertir las siguientes {a} de {b}",
+    convert_next: "Convertir los {n} siguientes",
     convert: "Convertir",
     convert_one: "Convertir 1 archivo",
     convert_n: "Convertir {n} archivos",
@@ -532,6 +592,17 @@ static ES: Strings = Strings {
     failed: "Error",
     n_failed: "Con error: {n}",
     clear_finished: "Quitar terminados",
+    or_choose: "o elige archivos",
+    formats_and_more: "{list} y más",
+    use_for: "Uso",
+    preset_voice: "Voz",
+    preset_music: "Música",
+    preset_smallest: "Más pequeño",
+    limit_note: "La versión gratuita convierte {n} archivos por clic. El resto se queda en la lista para el siguiente.",
+    unlock_link: "Convierte todo de una vez con el desbloqueo único",
+    settings: "Configuración",
+    version: "Versión {v}",
+    rate: "Valorar la aplicación",
 };
 
 static IT: Strings = Strings {
@@ -549,7 +620,7 @@ static IT: Strings = Strings {
     save_to: "Salva in",
     same_folder: "la stessa cartella dell'originale",
     converting_left: "Conversione… {n} rimanenti",
-    convert_next: "Converti le prossime {a} di {b}",
+    convert_next: "Converti i prossimi {n}",
     convert: "Converti",
     convert_one: "Converti 1 file",
     convert_n: "Converti {n} file",
@@ -593,6 +664,17 @@ static IT: Strings = Strings {
     failed: "Errore",
     n_failed: "Non riusciti: {n}",
     clear_finished: "Rimuovi completati",
+    or_choose: "oppure scegli i file",
+    formats_and_more: "{list} e altri",
+    use_for: "Uso",
+    preset_voice: "Voce",
+    preset_music: "Musica",
+    preset_smallest: "Più leggero",
+    limit_note: "La versione gratuita converte {n} file per clic. Gli altri restano nell'elenco per il clic successivo.",
+    unlock_link: "Converti tutto in una volta con lo sblocco una tantum",
+    settings: "Impostazioni",
+    version: "Versione {v}",
+    rate: "Valuta l'app",
 };
 
 static PT: Strings = Strings {
@@ -610,7 +692,7 @@ static PT: Strings = Strings {
     save_to: "Salvar em",
     same_folder: "a mesma pasta do original",
     converting_left: "Convertendo… restam {n}",
-    convert_next: "Converter as próximas {a} de {b}",
+    convert_next: "Converter os próximos {n}",
     convert: "Converter",
     convert_one: "Converter 1 arquivo",
     convert_n: "Converter {n} arquivos",
@@ -654,6 +736,17 @@ static PT: Strings = Strings {
     failed: "Falhou",
     n_failed: "Com falha: {n}",
     clear_finished: "Limpar concluídos",
+    or_choose: "ou escolha arquivos",
+    formats_and_more: "{list} e mais",
+    use_for: "Uso",
+    preset_voice: "Voz",
+    preset_music: "Música",
+    preset_smallest: "Menor tamanho",
+    limit_note: "A versão gratuita converte {n} arquivos por clique. O restante fica na lista para o próximo.",
+    unlock_link: "Converta tudo de uma vez com o desbloqueio único",
+    settings: "Configurações",
+    version: "Versão {v}",
+    rate: "Avaliar o aplicativo",
 };
 
 static NL: Strings = Strings {
@@ -671,7 +764,7 @@ static NL: Strings = Strings {
     save_to: "Opslaan in",
     same_folder: "dezelfde map als het origineel",
     converting_left: "Converteren… nog {n}",
-    convert_next: "Volgende {a} van {b} converteren",
+    convert_next: "Volgende {n} converteren",
     convert: "Converteren",
     convert_one: "1 bestand converteren",
     convert_n: "{n} bestanden converteren",
@@ -715,6 +808,17 @@ static NL: Strings = Strings {
     failed: "Mislukt",
     n_failed: "Mislukt: {n}",
     clear_finished: "Voltooide wissen",
+    or_choose: "of kies bestanden",
+    formats_and_more: "{list} en meer",
+    use_for: "Gebruik",
+    preset_voice: "Spraak",
+    preset_music: "Muziek",
+    preset_smallest: "Kleinst",
+    limit_note: "De gratis versie converteert {n} bestanden per klik. De rest blijft in de lijst voor de volgende klik.",
+    unlock_link: "Alles in één keer converteren met de eenmalige ontgrendeling",
+    settings: "Instellingen",
+    version: "Versie {v}",
+    rate: "App beoordelen",
 };
 
 static PL: Strings = Strings {
@@ -732,7 +836,7 @@ static PL: Strings = Strings {
     save_to: "Zapisz w",
     same_folder: "tym samym folderze co oryginał",
     converting_left: "Konwertowanie… pozostało: {n}",
-    convert_next: "Konwertuj następne {a} z {b}",
+    convert_next: "Konwertuj kolejne (maks. {n})",
     convert: "Konwertuj",
     convert_one: "Konwertuj 1 plik",
     convert_n: "Konwertuj (pliki: {n})",
@@ -776,6 +880,17 @@ static PL: Strings = Strings {
     failed: "Błąd",
     n_failed: "Nieudane: {n}",
     clear_finished: "Usuń ukończone",
+    or_choose: "lub wybierz pliki",
+    formats_and_more: "{list} i inne",
+    use_for: "Przeznaczenie",
+    preset_voice: "Mowa",
+    preset_music: "Muzyka",
+    preset_smallest: "Najmniejszy",
+    limit_note: "Wersja bezpłatna konwertuje maksymalnie {n} naraz. Pozostałe pliki czekają na liście na kolejne kliknięcie.",
+    unlock_link: "Konwertuj wszystko naraz dzięki jednorazowemu odblokowaniu",
+    settings: "Ustawienia",
+    version: "Wersja {v}",
+    rate: "Oceń aplikację",
 };
 
 static TR: Strings = Strings {
@@ -793,7 +908,7 @@ static TR: Strings = Strings {
     save_to: "Kayıt yeri:",
     same_folder: "özgün dosyayla aynı klasör",
     converting_left: "Dönüştürülüyor… {n} kaldı",
-    convert_next: "{b} dosyadan sonraki {a} tanesini dönüştür",
+    convert_next: "Sonraki {n} dosyayı dönüştür",
     convert: "Dönüştür",
     convert_one: "1 dosyayı dönüştür",
     convert_n: "{n} dosyayı dönüştür",
@@ -837,6 +952,17 @@ static TR: Strings = Strings {
     failed: "Başarısız",
     n_failed: "Başarısız: {n}",
     clear_finished: "Bitenleri temizle",
+    or_choose: "veya dosya seçin",
+    formats_and_more: "{list} ve daha fazlası",
+    use_for: "Kullanım",
+    preset_voice: "Konuşma",
+    preset_music: "Müzik",
+    preset_smallest: "En küçük",
+    limit_note: "Ücretsiz sürüm tıklama başına {n} dosya dönüştürür. Kalanlar bir sonraki tıklama için listede bekler.",
+    unlock_link: "Tek seferlik kilit açma ile hepsini bir kerede dönüştürün",
+    settings: "Ayarlar",
+    version: "Sürüm {v}",
+    rate: "Uygulamayı değerlendir",
 };
 
 static RU: Strings = Strings {
@@ -854,7 +980,7 @@ static RU: Strings = Strings {
     save_to: "Сохранять в",
     same_folder: "ту же папку, что и оригинал",
     converting_left: "Конвертация… осталось: {n}",
-    convert_next: "Конвертировать следующие {a} из {b}",
+    convert_next: "Конвертировать следующие (до {n})",
     convert: "Конвертировать",
     convert_one: "Конвертировать 1 файл",
     convert_n: "Конвертировать файлы: {n}",
@@ -898,6 +1024,17 @@ static RU: Strings = Strings {
     failed: "Ошибка",
     n_failed: "С ошибкой: {n}",
     clear_finished: "Убрать готовые",
+    or_choose: "или выберите файлы",
+    formats_and_more: "{list} и другие",
+    use_for: "Назначение",
+    preset_voice: "Голос",
+    preset_music: "Музыка",
+    preset_smallest: "Минимальный размер",
+    limit_note: "Бесплатная версия конвертирует до {n} файлов за раз. Остальные ждут в списке следующего нажатия.",
+    unlock_link: "Конвертировать всё сразу с разовой разблокировкой",
+    settings: "Настройки",
+    version: "Версия {v}",
+    rate: "Оценить приложение",
 };
 
 static JA: Strings = Strings {
@@ -915,7 +1052,7 @@ static JA: Strings = Strings {
     save_to: "保存先",
     same_folder: "元のファイルと同じフォルダー",
     converting_left: "変換中… 残り{n}件",
-    convert_next: "{b}件のうち次の{a}件を変換",
+    convert_next: "次の {n} 件を変換",
     convert: "変換",
     convert_one: "1件を変換",
     convert_n: "{n}件を変換",
@@ -959,6 +1096,17 @@ static JA: Strings = Strings {
     failed: "失敗",
     n_failed: "失敗: {n}件",
     clear_finished: "完了した項目を消去",
+    or_choose: "またはファイルを選択",
+    formats_and_more: "{list} など",
+    use_for: "用途",
+    preset_voice: "音声",
+    preset_music: "音楽",
+    preset_smallest: "最小サイズ",
+    limit_note: "無料版では 1 回に {n} 件まで変換します。残りは次回のためにリストに残ります。",
+    unlock_link: "買い切りのロック解除ですべてを一度に変換",
+    settings: "設定",
+    version: "バージョン {v}",
+    rate: "このアプリを評価",
 };
 
 static KO: Strings = Strings {
@@ -976,7 +1124,7 @@ static KO: Strings = Strings {
     save_to: "저장 위치",
     same_folder: "원본과 같은 폴더",
     converting_left: "변환 중… {n}개 남음",
-    convert_next: "{b}개 중 다음 {a}개 변환",
+    convert_next: "다음 {n}개 변환",
     convert: "변환",
     convert_one: "1개 변환",
     convert_n: "{n}개 변환",
@@ -1020,6 +1168,17 @@ static KO: Strings = Strings {
     failed: "실패",
     n_failed: "실패: {n}개",
     clear_finished: "완료 항목 지우기",
+    or_choose: "또는 파일 선택",
+    formats_and_more: "{list} 등",
+    use_for: "용도",
+    preset_voice: "음성",
+    preset_music: "음악",
+    preset_smallest: "최소 크기",
+    limit_note: "무료 버전은 한 번에 {n}개까지 변환합니다. 나머지는 다음 변환을 위해 목록에 남아 있습니다.",
+    unlock_link: "한 번의 잠금 해제로 모두 한꺼번에 변환",
+    settings: "설정",
+    version: "버전 {v}",
+    rate: "앱 평가하기",
 };
 
 static ZH_HANS: Strings = Strings {
@@ -1037,7 +1196,7 @@ static ZH_HANS: Strings = Strings {
     save_to: "保存到",
     same_folder: "原文件所在的文件夹",
     converting_left: "正在转换… 还剩 {n} 个",
-    convert_next: "转换 {b} 个中的下 {a} 个",
+    convert_next: "转换接下来的 {n} 个",
     convert: "转换",
     convert_one: "转换 1 个文件",
     convert_n: "转换 {n} 个文件",
@@ -1081,6 +1240,17 @@ static ZH_HANS: Strings = Strings {
     failed: "失败",
     n_failed: "失败 {n} 个",
     clear_finished: "清除已完成",
+    or_choose: "或选择文件",
+    formats_and_more: "{list} 等",
+    use_for: "用途",
+    preset_voice: "人声",
+    preset_music: "音乐",
+    preset_smallest: "最小体积",
+    limit_note: "免费版每次最多转换 {n} 个文件，其余的会留在列表中等待下一次。",
+    unlock_link: "一次性解锁后可一次全部转换",
+    settings: "设置",
+    version: "版本 {v}",
+    rate: "为此应用评分",
 };
 
 static ZH_HANT: Strings = Strings {
@@ -1098,7 +1268,7 @@ static ZH_HANT: Strings = Strings {
     save_to: "儲存到",
     same_folder: "原始檔所在的資料夾",
     converting_left: "正在轉換… 還剩 {n} 個",
-    convert_next: "轉換 {b} 個中的下 {a} 個",
+    convert_next: "轉換接下來的 {n} 個",
     convert: "轉換",
     convert_one: "轉換 1 個檔案",
     convert_n: "轉換 {n} 個檔案",
@@ -1142,6 +1312,17 @@ static ZH_HANT: Strings = Strings {
     failed: "失敗",
     n_failed: "失敗 {n} 個",
     clear_finished: "清除已完成",
+    or_choose: "或選擇檔案",
+    formats_and_more: "{list} 等",
+    use_for: "用途",
+    preset_voice: "人聲",
+    preset_music: "音樂",
+    preset_smallest: "最小體積",
+    limit_note: "免費版每次最多轉換 {n} 個檔案，其餘的會留在清單中等待下一次。",
+    unlock_link: "一次性解鎖後可一次全部轉換",
+    settings: "設定",
+    version: "版本 {v}",
+    rate: "為此應用程式評分",
 };
 
 #[cfg(test)]
@@ -1199,8 +1380,8 @@ mod tests {
     #[test]
     fn fill_replaces_each_placeholder() {
         assert_eq!(
-            fill("Convert next {a} of {b}", &[("a", "3"), ("b", "8")]),
-            "Convert next 3 of 8"
+            fill("{a} of {b}", &[("a", "3"), ("b", "8")]),
+            "3 of 8"
         );
     }
 }
