@@ -69,8 +69,8 @@ impl Lang {
 
     /// Windows font files that cover this language, best first, each with
     /// how far to shift its glyphs down (as a fraction of the font size) so
-    /// they share a baseline with Segoe UI. Empty means egui's
-    /// built-in fonts are enough.
+    /// they share a baseline with Segoe UI. Empty means Segoe UI covers
+    /// the language.
     pub fn system_fonts(self) -> &'static [(&'static str, f32)] {
         match self {
             Lang::Ja => &[("YuGothM.ttc", 0.34), ("meiryo.ttc", 0.34), ("msgothic.ttc", 0.16)],
