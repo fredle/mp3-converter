@@ -28,7 +28,7 @@ const APP_NAME: &str = "MP4 to MP3 & Audio Converter";
 /// The app's Microsoft Store ID (12 characters, such as `9NXXXXXXXXXX`),
 /// for "Rate this app". The link stays hidden while this is empty; fill it
 /// in once the Store listing has its ID (Partner Center > Product identity).
-const STORE_ID: &str = "";
+const STORE_ID: &str = "XP99D661MJWKBX";
 /// Marks a decoder crash; shown to the user as the translated "couldn't read".
 const PANIC_MESSAGE: &str = "decoder panicked";
 /// Space between the window edge and its contents.
