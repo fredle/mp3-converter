@@ -1,7 +1,10 @@
 //! Carrying tags (title, artist, album and so on) from the original to the
 //! converted file, through Windows' own property handlers: the same ones
 //! Explorer uses for its Details pane. Best effort: a format or Windows
-//! edition without a handler simply gets no tags.
+//! edition without a handler simply gets no tags. Album art, which the
+//! handlers can show but not write, is carried by `art`.
+
+pub mod art;
 
 use std::path::Path;
 
@@ -127,6 +130,25 @@ pub fn get_text(path: &Path, key: &PROPERTYKEY) -> Option<String> {
         let result = text.to_string().ok();
         CoTaskMemFree(Some(text.0 as *const _));
         result.filter(|t| !t.is_empty())
+    }
+}
+
+/// Whether Windows finds an embedded picture in the file (the one Explorer
+/// shows as its thumbnail), for tests.
+#[cfg(test)]
+pub fn windows_sees_art(path: &Path) -> bool {
+    use windows::Win32::Storage::EnhancedStorage::PKEY_ThumbnailStream;
+    use windows::Win32::System::Variant::VT_STREAM;
+    let Some(store) = store(path, GPS_DEFAULT) else {
+        return false;
+    };
+    unsafe {
+        let Ok(mut value) = store.GetValue(&PKEY_ThumbnailStream) else {
+            return false;
+        };
+        let found = value.Anonymous.Anonymous.vt == VT_STREAM;
+        let _ = PropVariantClear(&mut value);
+        found
     }
 }
 

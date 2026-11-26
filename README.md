@@ -8,8 +8,9 @@ FLAC, and press Convert. Nothing is uploaded: files never leave the PC.
 
 ## What it does
 
-- Reads video (MP4, M4V, MOV, 3GP, 3G2, AVI, WMV, ASF, MKV, WebM) and audio
-  (MP3, M4A, M4B, AAC, WAV, FLAC, WMA, OGG, OGA, Opus). Drop files or whole
+- Reads video (MP4, M4V, MOV, 3GP, 3G2, AVI, WMV, ASF, MKV, WebM, MPG/MPEG,
+  VOB, MOD, TS, MTS/M2TS, M2T, TOD) and audio (MP3, MPA, M4A, M4B, M4R, AAC,
+  ADT, WAV, FLAC, WMA, AMR, MKA, OGG, OGA, Opus). Drop files or whole
   folders on the window, or use **Add files** / **Add folder**.
 - Writes MP3 (128, 192, 256 or 320 kbps), M4A (AAC at 96, 128, 160 or
   192 kbps), WAV or FLAC. The bitrates are shown as Smaller, Standard, High
@@ -36,8 +37,28 @@ FLAC, and press Convert. Nothing is uploaded: files never leave the PC.
   the window is in the background.
 - Keyboard: Ctrl+O adds files, Enter converts, Esc cancels a run or closes
   the unlock dialog.
-- Takes the first audio track of a video. A video with no sound is reported
-  as "No sound in this file".
+- Takes the first audio track of a video (in the file's own order), or a
+  chosen one: `mf::audio_tracks` lists each with its language, name, codec,
+  channels and sample rate. A video with no sound is reported as "No sound
+  in this file".
+- Trims (an optional start and end per file), cut to the exact sample: the
+  same samples as in a conversion of the whole file. Formats whose
+  timestamps are exact after a seek (MP4, MKV, FLAC, WAV, AMR, MPEG
+  program and transport streams, AVI) seek to just before the start; bare
+  MP3 and ADTS streams and WMA/WMV are decoded from the beginning instead,
+  because Windows' timestamps after a seek there were measured to be up to
+  1200 samples out.
+- Volume: Normalise (peak normalisation to -1 dBFS in two passes, at most
+  +30 dB) or a fixed change of up to ±30 dB through a 5 ms look-ahead
+  limiter. Peak normalisation was chosen over loudness (LUFS) matching
+  because it can never clip or need limiting and changes nothing but the
+  level; a recording with one loud click is lifted less, which is the safe
+  way to be wrong. The sound is processed as 32-bit float until the final
+  16-bit samples.
+- Copies cover art (JPEG or PNG) from MP3, MP4/M4A and FLAC sources to MP3,
+  M4A and FLAC output. Windows' property handlers can show art but not write
+  it, so `tags::art` writes the ID3 APIC frame, the MP4 `covr` item and the
+  FLAC PICTURE block itself, using existing padding where it can.
 - Mixes anything with more than two channels down to stereo. MP3 and M4A are
   written at 44.1 or 48 kHz; WAV and FLAC keep the source's sample rate.
 - Saves next to the original or into a folder you choose. It never overwrites
@@ -52,10 +73,12 @@ Foundation, so what it can open is what Windows can decode:
 
 | Format | What Windows needs |
 |---|---|
-| MP4, MOV, MKV, AVI, WMV, 3GP, MP3, M4A, AAC, WAV, FLAC, WMA | nothing, built in |
+| MP4, MOV, MKV, AVI, WMV, 3GP, MPG, VOB, TS, MP3, M4A, AAC, WAV, FLAC, WMA, AMR (narrow-band) | nothing, built in |
+| MTS, M2TS (camcorders, Blu-ray) | opens, but their usual Dolby Digital or Blu-ray LPCM sound cannot be decoded |
 | WebM | usually nothing; if Windows cannot read it, Web Media Extensions |
 | OGG, OGA, Opus | Web Media Extensions, free in the Microsoft Store |
 | Dolby Digital (AC-3) sound | not supported: current versions of Windows no longer include the decoder |
+| AMR-WB (wide-band) | not supported: Windows reads the file but has no decoder |
 
 If the extension is missing, the row says "Needs a Windows extension" and the
 app links to its Store page. Install it, then press **Try again**. A file

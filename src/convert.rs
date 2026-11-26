@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::mf::{MfError, Progress, Target};
+use crate::mf::{Edits, MfError, Progress, Target, TrimError};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Format {
@@ -135,11 +135,17 @@ pub enum ConvertError {
     Other(String),
 }
 
-const VIDEO: [&str; 10] = [
-    "mp4", "m4v", "mov", "3gp", "3g2", "avi", "wmv", "asf", "mkv", "webm",
+/// Video containers Windows opens without extra codecs (WebM aside). The
+/// MPEG program and transport streams (MPG, VOB, TS, MTS/M2TS from
+/// camcorders and Blu-ray, MOD/TOD from older camcorders) are read by
+/// Windows' own MPEG-2 source.
+const VIDEO: [&str; 21] = [
+    "mp4", "m4v", "mov", "3gp", "3g2", "3gpp", "3gp2", "avi", "wmv", "asf", "mkv", "webm", "mpg",
+    "mpeg", "vob", "mod", "ts", "mts", "m2ts", "m2t", "tod",
 ];
-const AUDIO: [&str; 11] = [
-    "mp3", "m4a", "m4b", "aac", "wav", "flac", "wma", "ogg", "oga", "opus", "adts",
+const AUDIO: [&str; 16] = [
+    "mp3", "mpa", "m4a", "m4b", "m4r", "aac", "adt", "adts", "wav", "flac", "wma", "amr", "mka",
+    "ogg", "oga", "opus",
 ];
 
 fn extension_of(path: &Path) -> String {
@@ -299,11 +305,32 @@ fn is_container_signature(head: &[u8], codec: Codec) -> bool {
     }
 }
 
-/// Converts one file and returns where it was written. `progress` follows
-/// the conversion and can cancel it.
+/// Converts one file, whole, from its first audio track, and returns where
+/// it was written. `progress` follows the conversion and can cancel it.
 pub fn convert_file(
     source: &Path,
     options: &Options,
+    progress: &Progress,
+) -> Result<PathBuf, ConvertError> {
+    convert_file_with(source, options, &Edits::default(), progress)
+}
+
+/// English text for a trim that does not fit the file. The window should
+/// check a trim with `Trim::resolve` before converting and say this in its
+/// own words; this is the fallback a conversion fails with.
+pub fn trim_error_text(error: TrimError) -> &'static str {
+    match error {
+        TrimError::Invalid => "The start or end time is not a valid time",
+        TrimError::EndBeforeStart => "The end time is before the start time",
+        TrimError::StartPastEnd => "The start time is after the end of the file",
+    }
+}
+
+/// `convert_file` with a trim, an audio track and a volume change.
+pub fn convert_file_with(
+    source: &Path,
+    options: &Options,
+    edits: &Edits,
     progress: &Progress,
 ) -> Result<PathBuf, ConvertError> {
     if progress.cancelled() {
@@ -314,10 +341,16 @@ pub fn convert_file(
     }
     let target = output_path(source, options, |p| p.exists());
     let shape = options.format.target(options.kbps, options.mono);
-    match crate::mf::transcode(source, &target, shape, options.mono, progress) {
+    match crate::mf::transcode(source, &target, shape, options.mono, edits, progress) {
         Ok(()) => {}
         Err(MfError::Cancelled) => return Err(ConvertError::Cancelled),
         Err(MfError::NoAudio) => return Err(ConvertError::NoAudio),
+        Err(MfError::NoSuchTrack) => {
+            return Err(ConvertError::Other("This file has no such audio track".to_owned()));
+        }
+        Err(MfError::Trim(error)) => {
+            return Err(ConvertError::Other(trim_error_text(error).to_owned()));
+        }
         Err(MfError::Unreadable(message)) => {
             // Windows gives much the same answer for a damaged file as for a
             // missing codec; only send people to the Store for a real one.
@@ -334,6 +367,9 @@ pub fn convert_file(
     // fails the conversion; WAV files get none.
     if options.format != Format::Wav {
         crate::tags::copy(source, &target);
+        // And the cover picture, after the tags: Windows rewrites the tag
+        // area when it saves them.
+        crate::tags::art::copy(source, &target);
     }
     // Keep the file's date so sorting by date still works. After the tags,
     // because writing them touches the file.
@@ -401,6 +437,11 @@ mod tests {
         assert!(!is_supported(Path::new("notes.txt")));
         assert!(!is_supported(Path::new("photo.jpg")));
         assert!(!is_supported(Path::new("noextension")));
+        for name in ["a.AMR", "a.mts", "a.m2ts", "a.mpg", "a.mpeg", "a.ts", "a.m4b", "a.3g2", "a.vob"] {
+            assert!(is_supported(Path::new(name)), "{name}");
+        }
+        assert!(is_video(Path::new("clip.MTS")));
+        assert!(!is_video(Path::new("memo.amr")));
     }
 
     #[test]
@@ -734,6 +775,311 @@ mod tests {
             // Writing the tags did not undo the date carry-over.
             let modified = |p: &Path| std::fs::metadata(p).unwrap().modified().unwrap();
             assert_eq!(modified(&out), modified(&mp3), "{format:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mono 16-bit WAV file of `frames` samples made by `f` (full scale
+    /// 1.0).
+    fn write_wav_with(path: &Path, rate: u32, frames: u32, f: impl Fn(u32) -> f32) {
+        let mut bytes = crate::mf::wav_header(rate, 1, frames * 2).to_vec();
+        for i in 0..frames {
+            bytes.extend_from_slice(&crate::mf::edit::to_i16(f(i)).to_le_bytes());
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    /// The samples of a 16-bit WAV file, all channels interleaved.
+    fn wav_samples(path: &Path) -> Vec<i16> {
+        let b = std::fs::read(path).unwrap();
+        b[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()
+    }
+
+    fn peak_of(samples: &[i16]) -> f32 {
+        samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0) as f32 / 32_767.0
+    }
+
+    /// The first frame of a WAV file louder than half scale.
+    fn first_loud_frame(path: &Path) -> Option<usize> {
+        let channels = wav_info(path).1 as usize;
+        wav_samples(path).iter().position(|s| s.unsigned_abs() > 16_000).map(|i| i / channels)
+    }
+
+    fn wav_frames(path: &Path) -> usize {
+        wav_samples(path).len() / wav_info(path).1 as usize
+    }
+
+    fn sine(i: u32, rate: u32, amplitude: f32) -> f32 {
+        (i as f32 * 440.0 / rate as f32 * std::f32::consts::TAU).sin() * amplitude
+    }
+
+    fn convert_or_skip(source: &Path, opts: &Options, edits: &Edits) -> Option<PathBuf> {
+        match convert_file_with(source, opts, edits, &Progress::default()) {
+            Ok(out) => Some(out),
+            Err(ConvertError::Other(m)) if m.contains("no encoder") => {
+                println!("skipped: {m}");
+                None
+            }
+            Err(e) => panic!("{source:?} {edits:?}: {e:?}"),
+        }
+    }
+
+    fn trim(start: f64, end: f64) -> Edits {
+        Edits {
+            trim: crate::mf::Trim { start: Some(start), end: Some(end) },
+            ..Edits::default()
+        }
+    }
+
+    /// A quiet tone with a loud burst at 3.0 s, so where the cut fell can
+    /// be measured.
+    fn write_marked(path: &Path, rate: u32, seconds: u32) {
+        let burst = 3 * rate..3 * rate + rate / 50;
+        write_wav_with(path, rate, rate * seconds, |i| {
+            sine(i, rate, if burst.contains(&i) { 0.9 } else { 0.1 })
+        });
+    }
+
+    #[test]
+    fn trim_keeps_exactly_the_chosen_part_of_a_wav() {
+        let dir = temp_dir("trim-wav");
+        let src = dir.join("marked.wav");
+        let rate = 44_100;
+        write_marked(&src, rate, 10);
+        // A plain copy, to find the burst in.
+        std::fs::copy(&src, dir.join("burst.wav")).unwrap();
+        let progress = Progress::default();
+        let edits = trim(2.5, 6.0);
+        let out = convert_file_with(&src, &options(Format::Wav), &edits, &progress).unwrap();
+        assert_eq!(progress.fraction(), Some(1.0));
+        assert_eq!(wav_samples(&out).len(), 3 * rate as usize + rate as usize / 2);
+        // The burst is 2.5 s earlier, to the sample.
+        let burst = first_loud_frame(&src.with_file_name("burst.wav")).unwrap();
+        assert_eq!(first_loud_frame(&out), Some(burst - 2 * rate as usize - rate as usize / 2));
+        // The size estimate for the trimmed length is exact for WAV.
+        let info = crate::mf::probe(&src).unwrap().trimmed(&edits.trim);
+        assert_eq!(info.seconds, Some(3.5));
+        let size = std::fs::metadata(&out).unwrap().len();
+        assert_eq!(estimate_bytes(Format::Wav, 0, false, &info), Some(size));
+        // An end past the file means to the end; a start past it fails.
+        let tail = convert_file_with(&src, &options(Format::Wav), &trim(8.0, 99.0), &Progress::default()).unwrap();
+        assert_eq!(wav_samples(&tail).len(), 2 * rate as usize);
+        assert!(matches!(
+            convert_file_with(&src, &options(Format::Wav), &trim(12.0, 13.0), &Progress::default()),
+            Err(ConvertError::Other(_))
+        ));
+        assert!(matches!(
+            convert_file_with(&src, &options(Format::Wav), &trim(5.0, 4.0), &Progress::default()),
+            Err(ConvertError::Other(_))
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Compressed sources seek only roughly; the cut must still land on the
+    /// exact sample. Compares where the burst falls in a whole and a
+    /// trimmed decode of the same MP3 and M4A.
+    #[test]
+    fn trim_is_sample_accurate_in_compressed_files() {
+        let dir = temp_dir("trim-lossy");
+        let src = dir.join("marked.wav");
+        let rate = 44_100;
+        write_marked(&src, rate, 10);
+        let mut encoded_files = Vec::new();
+        for format in [Format::Mp3, Format::M4a, Format::Flac] {
+            if let Some(encoded) = convert_or_skip(&src, &options(format), &Edits::default()) {
+                encoded_files.push((format!("{format:?}"), encoded));
+            }
+        }
+        // ADTS (a raw .aac stream), which has no index to seek with.
+        use windows::Win32::Media::MediaFoundation::MFTranscodeContainerType_ADTS;
+        let adts = dir.join("marked.aac");
+        let burst = 3 * rate..3 * rate + rate / 50;
+        let marked = |_, i| sine(i, rate, if burst.contains(&i) { 0.9 } else { 0.1 });
+        if crate::mf::tests::write_aac(&adts, Some(&MFTranscodeContainerType_ADTS), 1, 10, marked).is_ok() {
+            encoded_files.push(("ADTS".to_owned(), adts));
+        }
+        for (format, encoded) in encoded_files {
+            let whole = convert_file(&encoded, &options(Format::Wav), &Progress::default()).unwrap();
+            let full_at = first_loud_frame(&whole).unwrap();
+            for (start, end) in [(2.5, 6.0), (0.25, 4.0)] {
+                let progress = Progress::default();
+                let cut = convert_file_with(&encoded, &options(Format::Wav), &trim(start, end), &progress)
+                    .unwrap();
+                assert_eq!(progress.fraction(), Some(1.0), "{format}");
+                let frames = wav_frames(&cut);
+                let wanted = ((end - start) * rate as f64) as usize;
+
+                let cut_at = first_loud_frame(&cut).unwrap();
+                let shift = full_at as i64 - cut_at as i64;
+                let expected = (start * rate as f64) as i64;
+                assert!(frames.abs_diff(wanted) <= 1, "{format} {start}: {frames} vs {wanted}");
+                assert!((shift - expected).abs() <= 2, "{format} {start}: moved {shift}, wanted {expected}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn volume_normalises_and_boosts_without_clipping() {
+        use crate::mf::Volume;
+        use crate::mf::edit::CEILING;
+        let dir = temp_dir("volume");
+        let src = dir.join("quiet.wav");
+        let rate = 44_100;
+        write_wav_with(&src, rate, rate * 3, |i| sine(i, rate, 0.05));
+        let with = |volume| Edits { volume, ..Edits::default() };
+        let wav = options(Format::Wav);
+        // Unchanged really is unchanged.
+        let same = convert_or_skip(&src, &wav, &with(Volume::Unchanged)).unwrap();
+        assert_eq!(wav_samples(&same), wav_samples(&src));
+        // Normalised: the peak is at the ceiling.
+        let progress = Progress::default();
+        let loud = convert_file_with(&src, &wav, &with(Volume::Normalise), &progress).unwrap();
+        assert_eq!(progress.fraction(), Some(1.0));
+        let samples = wav_samples(&loud);
+        assert_eq!(samples.len(), wav_samples(&src).len());
+        assert!((peak_of(&samples) - CEILING).abs() < 0.005, "{}", peak_of(&samples));
+        // +6 dB doubles it.
+        let boosted = convert_or_skip(&src, &wav, &with(Volume::Boost { db: 6.0 })).unwrap();
+        assert!((peak_of(&wav_samples(&boosted)) - 0.0998).abs() < 0.002);
+        // +30 dB would be 1.58: the limiter holds it at the ceiling.
+        let limited = convert_or_skip(&src, &wav, &with(Volume::Boost { db: 30.0 })).unwrap();
+        let peak = peak_of(&wav_samples(&limited));
+        assert!(peak <= CEILING + 0.0005 && peak > CEILING * 0.97, "{peak}");
+        // Through the MP3 encoder and back, still not clipped.
+        if let Some(mp3) = convert_or_skip(&src, &options(Format::Mp3), &with(Volume::Normalise)) {
+            let back = convert_file(&mp3, &wav, &Progress::default()).unwrap();
+            let peak = peak_of(&wav_samples(&back));
+            assert!(peak > 0.8 && peak < 1.0, "{peak}");
+        }
+        // Normalising a trimmed part measures only that part.
+        let marked = dir.join("marked.wav");
+        write_marked(&marked, rate, 10);
+        let edits = Edits { volume: Volume::Normalise, ..trim(5.0, 8.0) };
+        let part = convert_or_skip(&marked, &wav, &edits).unwrap();
+        // The quiet 0.1 tone (no burst in this part) comes up to the ceiling.
+        assert!((peak_of(&wav_samples(&part)) - CEILING).abs() < 0.005);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_and_converts_a_chosen_audio_track() {
+        let dir = temp_dir("tracks");
+        let src = dir.join("two.mp4");
+        if let Err(e) = crate::mf::tests::write_aac_tracks(&src, None, &[0.1, 0.5], 2) {
+            println!("skipped: cannot write two tracks: {e:?}");
+            return;
+        }
+        let tracks = crate::mf::audio_tracks(&src).unwrap();
+        assert_eq!(tracks.len(), 2, "{tracks:?}");
+        for (i, t) in tracks.iter().enumerate() {
+            assert_eq!(t.index, i);
+            assert_eq!((t.channels, t.rate, t.codec), (2, 44_100, Some("AAC")));
+            assert!(t.decodable);
+        }
+        let wav = options(Format::Wav);
+        let first = convert_or_skip(&src, &wav, &Edits::default()).unwrap();
+        let second = convert_or_skip(&src, &wav, &Edits { track: 1, ..Edits::default() }).unwrap();
+        let (p1, p2) = (peak_of(&wav_samples(&first)), peak_of(&wav_samples(&second)));
+        assert!((p1 - 0.1).abs() < 0.03 && (p2 - 0.5).abs() < 0.1, "{p1} {p2}");
+        assert_eq!(crate::mf::probe_track(&src, 1).unwrap().channels, 2);
+        assert!(matches!(
+            convert_file_with(&src, &wav, &Edits { track: 2, ..Edits::default() }, &Progress::default()),
+            Err(ConvertError::Other(_))
+        ));
+        // A plain audio file has one track.
+        let tone = dir.join("tone.wav");
+        write_tone(&tone, 44_100, 1);
+        let one = crate::mf::audio_tracks(&tone).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].codec, Some("PCM"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Puts a cover on an MP3, converts it to every format that holds one,
+    /// and reads the cover back.
+    #[test]
+    fn cover_art_is_carried_over() {
+        let dir = temp_dir("art");
+        let src = dir.join("tone.wav");
+        write_tone(&src, 44_100, 2);
+        let Some(mp3) = convert_or_skip(&src, &options(Format::Mp3), &Edits::default()) else {
+            return;
+        };
+        let cover = crate::tags::art::tests::png();
+        assert!(crate::tags::art::write(&mp3, &cover));
+        assert_eq!(crate::tags::art::read(&mp3), Some(cover.clone()));
+        // Writing it did not hurt the audio.
+        let back = convert_file(&mp3, &options(Format::Wav), &Progress::default()).unwrap();
+        assert!((wav_info(&back).2 - 2.0).abs() < 0.2);
+        for format in [Format::Mp3, Format::M4a, Format::Flac] {
+            let Some(out) = convert_or_skip(&mp3, &options(format), &Edits::default()) else {
+                continue;
+            };
+            assert_eq!(crate::tags::art::read(&out), Some(cover.clone()), "{format:?}");
+            // Windows' own handler finds it too (Explorer's thumbnail).
+            assert!(crate::tags::windows_sees_art(&out), "{format:?}");
+            // And the result still plays.
+            let again = convert_file(&out, &options(Format::Wav), &Progress::default()).unwrap();
+            assert!((wav_info(&again).2 - 2.0).abs() < 0.2, "{format:?}");
+        }
+        // A file without art gets none, and converting it is unaffected.
+        let plain = convert_or_skip(&src, &options(Format::Flac), &Edits::default()).unwrap();
+        assert_eq!(crate::tags::art::read(&plain), None);
+        assert!(!crate::tags::windows_sees_art(&plain));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each container added beyond the original list opens and converts.
+    /// The files are made with Windows' own encoders and muxers (or simple
+    /// repackaging), so a Windows without one skips that format.
+    #[test]
+    fn more_containers_open() {
+        use windows::Win32::Media::MediaFoundation::{
+            MFTranscodeContainerType_ADTS, MFTranscodeContainerType_MPEG2,
+        };
+        let dir = temp_dir("containers");
+        let tone = dir.join("tone.wav");
+        write_tone(&tone, 44_100, 2);
+        let mut made: Vec<PathBuf> = Vec::new();
+        let copy_as = |from: &Path, ext: &str, made: &mut Vec<PathBuf>| {
+            let to = dir.join(format!("copy-{ext}.{ext}"));
+            std::fs::copy(from, &to).unwrap();
+            made.push(to);
+        };
+        if let Some(m4a) = convert_or_skip(&tone, &options(Format::M4a), &Edits::default()) {
+            for ext in ["m4b", "m4r", "3g2", "3gpp", "3gp2"] {
+                copy_as(&m4a, ext, &mut made);
+            }
+        }
+        if let Some(mp3) = convert_or_skip(&tone, &options(Format::Mp3), &Edits::default()) {
+            copy_as(&mp3, "mpa", &mut made);
+        }
+        let adts = dir.join("tone.aac");
+        match crate::mf::tests::write_aac_tracks(&adts, Some(&MFTranscodeContainerType_ADTS), &[0.3], 2) {
+            Ok(()) => copy_as(&adts, "adt", &mut made),
+            Err(e) => println!("skipped ADTS: {e:?}"),
+        }
+        let ts = dir.join("tone.ts");
+        match crate::mf::tests::write_aac_tracks(&ts, Some(&MFTranscodeContainerType_MPEG2), &[0.3], 2) {
+            Ok(()) => {
+                for ext in ["ts", "m2t", "tod"] {
+                    copy_as(&ts, ext, &mut made);
+                }
+                // Some camcorders write plain transport streams as .mts.
+                copy_as(&ts, "mts", &mut made);
+            }
+            Err(e) => println!("skipped MPEG-2 TS: {e:?}"),
+        }
+        for path in &made {
+            assert!(is_supported(path), "{path:?}");
+            let info = crate::mf::probe(path).unwrap_or_else(|| panic!("{path:?} does not open"));
+            assert_eq!(info.channels, 2, "{path:?}");
+            let out = convert_file(path, &options(Format::Wav), &Progress::default())
+                .unwrap_or_else(|e| panic!("{path:?}: {e:?}"));
+            let seconds = wav_info(&out).2;
+            assert!((seconds - 2.0).abs() < 0.2, "{path:?}: {seconds}");
+            println!("opened {:?}", path.extension().unwrap());
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
