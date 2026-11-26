@@ -14,7 +14,16 @@ const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 /// Must run before anything else in `main` - Velopack may terminate or
 /// restart the process to carry out an install/uninstall/update step.
 pub fn run_app_hooks() {
-    VelopackApp::build().run();
+    VelopackApp::build()
+        .on_after_install_fast_callback(|_| register_shell())
+        .on_after_update_fast_callback(|_| register_shell())
+        .on_before_uninstall_fast_callback(|_| crate::shell::unregister())
+        .run();
+}
+
+fn register_shell() {
+    // Explorer integration is a nicety: never let it fail an install/update.
+    let _ = crate::shell::register();
 }
 
 /// The running version, for display.
